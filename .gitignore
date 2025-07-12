@@ -1,0 +1,13 @@
+.env
+*.db
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.DS_Store
+books/
+*.log
+.venv/
+venv/
