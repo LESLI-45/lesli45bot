@@ -34,7 +34,7 @@ from PIL import Image
 import io
 import base64
 
-import openai
+from openai import AsyncOpenAI
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, PhotoSize
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
@@ -509,8 +509,8 @@ class ImageAnalyzer:
             else:
                 prompt = "Проанализируй это изображение и дай психологическую оценку для целей знакомства и общения."
             
-            response = await openai.ChatCompletion.acreate(
-                model="gpt-4-vision-preview",
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4o",
                 messages=[
                     {
                         "role": "user",
@@ -538,6 +538,7 @@ class DialogSimulator:
     """Класс для симуляции диалогов"""
     
     def __init__(self):
+        self.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         self.simulation_modes = {
             'shy': 'застенчивая девушка',
             'confident': 'уверенная в себе',
@@ -568,7 +569,7 @@ class DialogSimulator:
         """
         
         try:
-            response = await openai.ChatCompletion.acreate(
+            response = await self.openai_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
@@ -615,7 +616,7 @@ class LesliAssistant:
         self.image_analyzer = ImageAnalyzer()
         self.dialog_simulator = DialogSimulator()
         self.psycho_analyzer = PsychoAnalyzer()
-        openai.api_key = config.OPENAI_API_KEY
+        self.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         
         # Загружаем книги при инициализации
         self.knowledge.load_books_from_directory()
@@ -701,7 +702,7 @@ class LesliAssistant:
     async def get_gpt_response(self, messages: List[Dict]) -> str:
         """Получение ответа от GPT-4o"""
         try:
-            response = await openai.ChatCompletion.acreate(
+           response = await self.openai_client.chat.completions.create(
                 model=config.MODEL,
                 messages=messages,
                 max_tokens=1000,
