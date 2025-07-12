@@ -49,15 +49,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-class Config:
-    def __init__(self):
-        self.TELEGRAM_TOKEN = "7709233981:AAG87qbebbUt4q4SEx1epBvWySlTDAr8zaI"
-        self.OPENAI_API_KEY = "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"
-        self.DATABASE_PATH = "lesli_bot.db"
-        self.MAX_CONTEXT_LENGTH = 4000
-        self.MODEL = "gpt-4o"
-
-config = Config()
+from config import config
 
 class KnowledgeBase:
     """Класс для работы с базой знаний из книг"""
