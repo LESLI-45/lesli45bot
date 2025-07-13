@@ -1390,6 +1390,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 from aiogram import types
 
 @dp.message_handler(commands=["start"])
