@@ -451,7 +451,7 @@ class ImageAnalyzer:
     """Класс для анализа изображений"""
     
     def __init__(self):
-        pass
+      self.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
     
     async def analyze_photo(self, photo_data: bytes, analysis_type: str = "general") -> str:
         """Анализ фото с помощью GPT-4V"""
