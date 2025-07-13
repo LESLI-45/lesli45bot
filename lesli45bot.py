@@ -17,7 +17,6 @@ lesli_bot.db        - база данных (создается автомати
 2. Поместите туда ваши книги в форматах: PDF, DOCX, EPUB, TXT
 3. Запустите бота - он автоматически обработает все книги
 """
-
 import asyncio
 import logging
 from datetime import datetime, timedelta
