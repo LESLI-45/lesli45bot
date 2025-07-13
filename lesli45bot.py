@@ -660,19 +660,20 @@ class LesliAssistant:
 ВАЖНО: Всегда помни о согласии, границах и этике. Помогай становиться лучшим мужчиной, а не манипулятором.
 """
 
-    async def get_gpt_response(self, messages: List[Dict]) -> str:
+       async def get_gpt_response(self, messages: List[Dict]) -> str:
         """Получение ответа от GPT-4o"""
         try:
-           response = await self.openai_client.chat.completions.create(
+            response = await self.openai_client.chat.completions.create(
                 model=config.MODEL,
                 messages=messages,
                 max_tokens=1000,
                 temperature=0.7
             )
-            return response.choices[0].message.content
+            return response.choices[0].message.content  # ← теперь с правильным отступом
         except Exception as e:
             logger.error(f"Ошибка OpenAI: {e}")
             return "Извините, произошла ошибка при обращении к ИИ. Попробуйте позже."
+
 
     async def process_message(self, user_id: int, user_message: str) -> str:
         """Обработка сообщения пользователя"""
