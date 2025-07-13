@@ -1390,3 +1390,8 @@ def main():
 
 if __name__ == '__main__':
     main()
+from aiogram import types
+
+@dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    await message.answer("Привет! Я Лесли-бот. Готов помогать тебе разбирать кейсы и становиться мастером игры 😉")
