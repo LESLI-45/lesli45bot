@@ -3,19 +3,6 @@
 """
 LESLI45BOT - Персональный Telegram-ассистент по соблазнению
 Основан на GPT-4o с базой знаний из книг Алекса Лесли
-
-УСТАНОВКА ЗАВИСИМОСТЕЙ:
-pip install openai python-telegram-bot PyPDF2 python-docx ebooklib Pillow
-
-СТРУКТУРА ФАЙЛОВ:
-lesli45bot.py       - основной файл бота
-books/              - папка с вашими книгами (PDF, DOCX, EPUB, TXT)
-lesli_bot.db        - база данных (создается автоматически)
-
-КАК ЗАГРУЗИТЬ МАТЕРИАЛЫ:
-1. Создайте папку "books" рядом с файлом бота
-2. Поместите туда ваши книги в форматах: PDF, DOCX, EPUB, TXT
-3. Запустите бота - он автоматически обработает все книги
 """
 
 import asyncio
@@ -110,7 +97,6 @@ class KnowledgeBase:
             for item in book.get_items():
                 if item.get_type() == ebooklib.ITEM_DOCUMENT:
                     content = item.get_content().decode('utf-8')
-                    # Простая очистка HTML тегов
                     clean_text = re.sub('<[^<]+?>', '', content)
                     text += clean_text + "\n"
             return text
@@ -140,7 +126,6 @@ class KnowledgeBase:
         """Обработка одной книги"""
         logger.info(f"Обрабатываю книгу: {book_name}")
         
-        # Определяем тип файла и извлекаем текст
         if file_path.lower().endswith('.pdf'):
             text = self.extract_text_from_pdf(file_path)
         elif file_path.lower().endswith('.docx'):
@@ -158,20 +143,17 @@ class KnowledgeBase:
             logger.warning(f"Не удалось извлечь текст из {book_name}")
             return
         
-        # Разбиваем текст на части для лучшего поиска
         chunks = self.split_text_into_chunks(text, chunk_size=1000)
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Проверяем, есть ли уже эта книга в базе
         cursor.execute('SELECT COUNT(*) FROM knowledge_base WHERE book_name = ?', (book_name,))
         if cursor.fetchone()[0] > 0:
             logger.info(f"Книга {book_name} уже в базе знаний")
             conn.close()
             return
         
-        # Сохраняем части книги в базу
         for i, chunk in enumerate(chunks):
             keywords = self.extract_keywords(chunk)
             category = self.categorize_content(chunk, book_name)
@@ -210,7 +192,6 @@ class KnowledgeBase:
         """Извлечение ключевых слов"""
         keywords = []
         
-        # Основные термины соблазнения
         seduction_terms = [
             'соблазнение', 'флирт', 'свидание', 'привлечение', 'харизма',
             'доминирование', 'фрейм', 'тест', 'комфорт', 'притяжение',
@@ -223,7 +204,7 @@ class KnowledgeBase:
             if term in text_lower:
                 keywords.append(term)
         
-        return ', '.join(keywords[:10])  # Максимум 10 ключевых слов
+        return ', '.join(keywords[:10])
     
     def categorize_content(self, text: str, book_name: str) -> str:
         """Категоризация контента"""
@@ -247,7 +228,6 @@ class KnowledgeBase:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Поиск по ключевым словам и содержимому
         search_terms = query.lower().split()
         
         results = []
@@ -263,11 +243,10 @@ class KnowledgeBase:
         
         conn.close()
         
-        # Удаляем дубликаты и возвращаем
         unique_results = []
         seen = set()
         for result in results:
-            if result[2] not in seen:  # content as identifier
+            if result[2] not in seen:
                 unique_results.append({
                     'book_name': result[0],
                     'chapter': result[1],
@@ -401,17 +380,14 @@ class ConversationMemory:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Проверяем есть ли запись за сегодня
         cursor.execute('SELECT id FROM user_stats WHERE user_id = ? AND date = ?', (user_id, today))
         if cursor.fetchone():
-            # Обновляем существующую запись
             cursor.execute(f'''
                 UPDATE user_stats 
                 SET {stat_type} = {stat_type} + ? 
                 WHERE user_id = ? AND date = ?
             ''', (value, user_id, today))
         else:
-            # Создаем новую запись
             cursor.execute(f'''
                 INSERT INTO user_stats (user_id, date, {stat_type})
                 VALUES (?, ?, ?)
@@ -456,7 +432,6 @@ class ImageAnalyzer:
     async def analyze_photo(self, photo_data: bytes, analysis_type: str = "general") -> str:
         """Анализ фото с помощью GPT-4V"""
         try:
-            # Конвертируем фото в base64
             base64_image = base64.b64encode(photo_data).decode('utf-8')
             
             if analysis_type == "selfie":
@@ -542,7 +517,6 @@ class PsychoAnalyzer:
     
     def analyze_attachment_style(self, behavior_description: str) -> Dict:
         """Анализ стиля привязанности"""
-        # Упрощенная логика для демонстрации
         if any(word in behavior_description.lower() for word in ['тревожится', 'переживает', 'часто пишет']):
             return {
                 'style': 'тревожная',
@@ -572,10 +546,7 @@ class LesliAssistant:
         self.psycho_analyzer = PsychoAnalyzer()
         self.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         
-        # Загружаем книги при инициализации
         self.knowledge.load_books_from_directory()
-        
-        # Системный промпт с встроенной базой знаний
         self.system_prompt = self._create_system_prompt()
     
     def _create_system_prompt(self) -> str:
@@ -607,7 +578,7 @@ class LesliAssistant:
    - Эффект простого воздействия (Zajonc)
    - Теория самоопределения (Deci & Ryan)
    - Когнитивный диссонанс (Festinger)
-   - Социальное влияние и убеждение (Cialdини)
+   - Социальное влияние и убеждение (Cialdini)
 
 4. НЕЙРОПСИХОЛОГИЯ И ГОРМОНЫ:
    - Роль окситоцина в привязанности
@@ -640,30 +611,13 @@ class LesliAssistant:
 - Предлагаешь готовые фразы с объяснением психологического воздействия
 - Учитываешь этические аспекты и согласие
 
-КОМАНДЫ КОТОРЫЕ ТЫ ОБРАБАТЫВАЕШЬ:
-/кейс - разбор с научной точки зрения
-/переписка - анализ на основе психологии коммуникации
-/ответ - помощь с учетом принципов влияния
-/свидание1 - подготовка с научным обоснованием
-/свидание2 - стратегия на основе теории привязанности
-/анализ1 - разбор с точки зрения невербалики и психологии
-/анализ2 - анализ интимности и границ
-/знание - теория из научных источников + база Лесли
-/наука - объяснение научных основ поведения
-
-РЕЖИМ НАСТАВНИКА:
-Когда включен, задаешь научно обоснованные вопросы:
-- "Какой тип привязанности у этой девушки?"
-- "Какие невербальные сигналы ты заметил?"
-- "Как она реагировала на твое доминирование/уязвимость?"
-
 ВАЖНО: Всегда помни о согласии, границах и этике. Помогай становиться лучшим мужчиной, а не манипулятором.
 """
 
     async def get_gpt_response(self, messages: List[Dict]) -> str:
         """Получение ответа от GPT-4o"""
         try:
-           response = await self.openai_client.chat.completions.create(
+            response = await self.openai_client.chat.completions.create(
                 model=config.MODEL,
                 messages=messages,
                 max_tokens=1000,
@@ -676,20 +630,15 @@ class LesliAssistant:
 
     async def process_message(self, user_id: int, user_message: str) -> str:
         """Обработка сообщения пользователя"""
-        # Ищем релевантную информацию в базе знаний
         knowledge_results = self.knowledge.search_knowledge(user_message)
-        
-        # Получаем историю разговора
         history = self.memory.get_conversation_history(user_id)
         
-        # Формируем контекст из базы знаний
         knowledge_context = ""
         if knowledge_results:
             knowledge_context = "\n\nРЕЛЕВАНТНАЯ ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ:\n"
-            for result in knowledge_results[:3]:  # Берем топ-3 результата
+            for result in knowledge_results[:3]:
                 knowledge_context += f"\nИз книги '{result['book_name']}':\n{result['content'][:500]}...\n"
         
-        # Формируем сообщения для GPT
         enhanced_system_prompt = self.system_prompt + knowledge_context
         
         messages = [
@@ -698,10 +647,8 @@ class LesliAssistant:
             {"role": "user", "content": user_message}
         ]
         
-        # Получаем ответ
         response = await self.get_gpt_response(messages)
         
-        # Сохраняем в память
         self.memory.save_message(user_id, "user", user_message)
         self.memory.save_message(user_id, "assistant", response)
         
@@ -710,19 +657,16 @@ class LesliAssistant:
 def create_main_menu_keyboard():
     """Создание обновленной клавиатуры меню"""
     keyboard = [
-        # Базовые функции анализа
         [InlineKeyboardButton("🧠 Кейс", callback_data="menu_keis"),
          InlineKeyboardButton("💬 Переписка", callback_data="menu_perepisca")],
         [InlineKeyboardButton("🎯 Ответ", callback_data="menu_otvet"),
          InlineKeyboardButton("📸 Скрин", callback_data="menu_skrin")],
         
-        # Свидания
         [InlineKeyboardButton("🥂 Свидание 1", callback_data="menu_svidanie1"),
          InlineKeyboardButton("🔥 Свидание 2", callback_data="menu_svidanie2")],
         [InlineKeyboardButton("🧠 Анализ 1", callback_data="menu_analiz1"),
          InlineKeyboardButton("🧠 Анализ 2", callback_data="menu_analiz2")],
         
-        # Новые практические функции
         [InlineKeyboardButton("🆘 SOS Сигналы", callback_data="menu_sos"),
          InlineKeyboardButton("🎭 Стили соблазнения", callback_data="menu_styles")],
         [InlineKeyboardButton("📖 Истории", callback_data="menu_stories"),
@@ -730,7 +674,6 @@ def create_main_menu_keyboard():
         [InlineKeyboardButton("👩 Типажи девушек", callback_data="menu_types"),
          InlineKeyboardButton("💬 Темы для свиданий", callback_data="menu_topics")],
         
-        # Психология и знания
         [InlineKeyboardButton("🧠 Психотип", callback_data="menu_psycho"),
          InlineKeyboardButton("📚 Знание", callback_data="menu_znanie")],
         [InlineKeyboardButton("🧬 Наука", callback_data="menu_nauka"),
@@ -743,10 +686,8 @@ def create_back_button():
     keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]]
     return InlineKeyboardMarkup(keyboard)
 
-# Инициализация расширенного ассистента
 assistant = LesliAssistant()
 
-# Обработчики команд с меню
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
     user_id = update.effective_user.id
@@ -794,168 +735,30 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=create_main_menu_keyboard()
         )
 
-# Базовые обработчики (остаются без изменений)
-async def handle_keis(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /кейс"""
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка обычных сообщений"""
     user_id = update.effective_user.id
-    text = update.message.text[6:].strip()  # Убираем "/кейс "
+    user_message = update.message.text
     
-    if not text:
-        await update.message.reply_text(
-            "📝 Опиши ситуацию с девушкой, которую нужно разобрать.\n\n"
-            "Например: /кейс Поцеловался на свидании, но она слилась"
-        )
-        return
+    if any(word in user_message.lower() for word in ['кейс', 'ситуация', 'проблема']):
+        prompt = f"КЕЙС: {user_message}\n\nРазбери ситуацию и дай конкретные рекомендации."
+    elif any(word in user_message.lower() for word in ['переписка', 'диалог', 'чат']):
+        prompt = f"АНАЛИЗ ПЕРЕПИСКИ: {user_message}\n\nПроанализируй психологию и дай советы."
+    elif any(word in user_message.lower() for word in ['свидание', 'встреча', 'поход']):
+        prompt = f"СВИДАНИЕ: {user_message}\n\nДай стратегию и советы."
+    elif any(word in user_message.lower() for word in ['стиль', 'подонок', 'романтик', 'провокатор']):
+        prompt = f"СТИЛИ СОБЛАЗНЕНИЯ: {user_message}\n\nРасскажи о подходящем стиле и техниках."
+    elif any(word in user_message.lower() for word in ['история', 'расскажи про', 'придумай историю']):
+        prompt = f"СОЗДАНИЕ ИСТОРИИ: {user_message}\n\nСоздай увлекательную историю под ситуацию."
+    elif any(word in user_message.lower() for word in ['типаж', 'тип девушки', 'психотип']):
+        prompt = f"ТИПАЖ ДЕВУШКИ: {user_message}\n\nОпредели типаж и дай стратегию общения."
+    else:
+        prompt = user_message
     
-    prompt = f"КЕЙС ДЛЯ РАЗБОРА: {text}\n\nДай глубокий анализ ситуации с психологическими причинами и конкретный план действий."
+    assistant.memory.update_user_stats(user_id, 'interactions')
+    
     response = await assistant.process_message(user_id, prompt)
     await update.message.reply_text(response)
-
-async def handle_perepisca(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /переписка"""
-    user_id = update.effective_user.id
-    text = update.message.text[11:].strip()  # Убираем "/переписка "
-    
-    if not text:
-        await update.message.reply_text(
-            "💬 Пришли текст переписки с девушкой для анализа.\n\n"
-            "Я разберу её психологию, мотивы и подскажу стратегию."
-        )
-        return
-    
-    prompt = f"АНАЛИЗ ПЕРЕПИСКИ:\n{text}\n\nПроанализируй психологию девушки, её мотивы, страхи, уровень заинтересованности и дай рекомендации."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_otvet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /ответ"""
-    user_id = update.effective_user.id
-    text = update.message.text[7:].strip()  # Убираем "/ответ "
-    
-    if not text:
-        await update.message.reply_text(
-            "🎯 Опиши ситуацию и что она написала.\n\n"
-            "Я подскажу идеальный ответ в твоем стиле."
-        )
-        return
-    
-    prompt = f"НУЖЕН ОТВЕТ НА: {text}\n\nПридумай идеальный ответ с учетом психологии и фреймов."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_svidanie1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /свидание1"""
-    user_id = update.effective_user.id
-    text = update.message.text[10:].strip()  # Убираем "/свидание1 "
-    
-    prompt = f"ПОДГОТОВКА К ПЕРВОМУ СВИДАНИЮ: {text}\n\nДай полную стратегию: место, поведение, темы, как закрыть свидание."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_svidanie2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /свидание2"""
-    user_id = update.effective_user.id
-    text = update.message.text[10:].strip()  # Убираем "/свидание2 "
-    
-    prompt = f"СТРАТЕГИЯ ВТОРОГО СВИДАНИЯ: {text}\n\nКак проверить готовность к близости, тактика сближения, работа с возражениями."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_analiz1(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /анализ1"""
-    user_id = update.effective_user.id
-    text = update.message.text[9:].strip()  # Убираем "/анализ1 "
-    
-    prompt = f"АНАЛИЗ ПЕРВОГО СВИДАНИЯ: {text}\n\nПроанализируй что прошло хорошо, где были ошибки, почему такая реакция девушки."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_analiz2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /анализ2"""
-    user_id = update.effective_user.id
-    text = update.message.text[9:].strip()  # Убираем "/анализ2 "
-    
-    prompt = f"АНАЛИЗ ВТОРОГО СВИДАНИЯ: {text}\n\nРазбери тактику сближения, причины отказа/согласия, что делать дальше."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_znanie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /знание"""
-    user_id = update.effective_user.id
-    text = update.message.text[8:].strip()  # Убираем "/знание "
-    
-    if not text:
-        await update.message.reply_text(
-            "📚 О чем хочешь узнать из теории?\n\n"
-            "Например: /знание как создать доверие перед сексом"
-        )
-        return
-    
-    prompt = f"ТЕОРИЯ ПО ТЕМЕ: {text}\n\nДай глубокое объяснение с примерами из базы знаний Лесли."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_nauka(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /наука"""
-    user_id = update.effective_user.id
-    text = update.message.text[7:].strip()  # Убираем "/наука "
-    
-    if not text:
-        await update.message.reply_text(
-            "🧬 О какой научной теории хочешь узнать?\n\n"
-            "Примеры:\n"
-            "• /наука теория привязанности\n"
-            "• /наука окситоцин и близость\n"
-            "• /наука эволюционная психология выбора партнера\n"
-            "• /наука невербальная коммуникация\n"
-            "• /наука дофамин и влечение"
-        )
-        return
-    
-    prompt = f"НАУЧНОЕ ОБЪЯСНЕНИЕ: {text}\n\nДай научно обоснованное объяснение с ссылками на исследования и применение в отношениях."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_nastavnik(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Включение режима наставника"""
-    user_id = update.effective_user.id
-    assistant.memory.set_mentor_mode(user_id, True)
-    
-    await update.message.reply_text(
-        "🤖 Режим наставника включен!\n\n"
-        "Теперь я буду периодически задавать вопросы для твоего развития."
-    )
-
-async def handle_psychotype(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка команды /психотип"""
-    user_id = update.effective_user.id
-    text = update.message.text[10:].strip()  # Убираем "/психотип "
-    
-    if not text:
-        await update.message.reply_text(
-            "🧠 Опиши поведение девушки для анализа психотипа:\n\n"
-            "Например:\n"
-            "/психотип Отвечает быстро, много эмодзи, часто первая пишет, "
-            "но на свидание не соглашается"
-        )
-        return
-    
-    # Анализируем стиль привязанности
-    attachment = assistant.psycho_analyzer.analyze_attachment_style(text)
-    
-    analysis = f"""
-🧠 **Психологический анализ:**
-
-**Стиль привязанности:** {attachment['style']}
-**Описание:** {attachment['description']}
-
-**Стратегия общения:** {attachment['strategy']}
-
-**Дополнительные рекомендации:**
-Напиши более подробное описание её поведения, и я дам расширенный анализ с конкретными тактиками.
-"""
-    
-    await update.message.reply_text(analysis)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка фотографий"""
@@ -965,14 +768,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пришли фото для анализа!")
         return
     
-    # Получаем фото в наилучшем качестве
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
-    
-    # Скачиваем фото
     photo_data = await file.download_as_bytearray()
     
-    # Определяем тип анализа по подписи
     caption = update.message.caption or ""
     if "селфи" in caption.lower() or "selfie" in caption.lower():
         analysis_type = "selfie"
@@ -983,105 +782,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🔍 Анализирую фото... Это может занять минуту.")
     
-    # Анализируем фото
     analysis = await assistant.image_analyzer.analyze_photo(photo_data, analysis_type)
-    
-    # Обновляем статистику
     assistant.memory.update_user_stats(user_id, 'interactions')
     
     await update.message.reply_text(f"📸 **Анализ фото:**\n\n{analysis}")
-
-# Новые обработчики для новых функций
-async def handle_sos_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка SOS сигналов"""
-    user_id = update.effective_user.id
-    
-    prompt = "Дай мне арсенал SOS сигналов из базы Лесли: влияние через образы, истории и жесты. Нужны техники экстренного воздействия."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_seduction_styles(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка стилей соблазнения"""
-    user_id = update.effective_user.id
-    
-    keyboard = [
-        [InlineKeyboardButton("😈 Подонок", callback_data="style_bad_boy")],
-        [InlineKeyboardButton("💕 Романтик", callback_data="style_romantic")],
-        [InlineKeyboardButton("🔥 Провокатор", callback_data="style_provocateur")],
-        [InlineKeyboardButton("📊 Структурный", callback_data="style_structural")],
-        [InlineKeyboardButton("👑 Мастер", callback_data="style_master")],
-        [InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "🎭 **Выбери стиль соблазнения:**\n\n"
-        "Каждый стиль имеет свои техники, манеру общения и подходы.",
-        reply_markup=reply_markup
-    )
-
-async def handle_stories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка создания историй"""
-    user_id = update.effective_user.id
-    text = update.message.text[8:].strip() if update.message else ""  # Убираем "/истории "
-    
-    if not text:
-        await update.message.reply_text(
-            "📖 Опиши психотип девушки или ситуацию:\n\n"
-            "Я создам персональную историю, которая её зацепит.\n\n"
-            "Например: 'Тревожная девушка, боится отношений'"
-        )
-        return
-    
-    prompt = f"СОЗДАНИЕ ИСТОРИИ: {text}\n\nСоздай увлекательную персональную историю под этот психотип девушки. История должна вызывать эмоции и интерес."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
-async def handle_interest_signals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка сигналов заинтересованности"""
-    user_id = update.effective_user.id
-    
-    keyboard = [
-        [InlineKeyboardButton("💬 В переписке", callback_data="signals_text")],
-        [InlineKeyboardButton("🥂 На свидании", callback_data="signals_date")],
-        [InlineKeyboardButton("📱 В соцсетях", callback_data="signals_social")],
-        [InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "💡 **Сигналы заинтересованности:**\n\n"
-        "Выбери где хочешь научиться распознавать интерес:",
-        reply_markup=reply_markup
-    )
-
-async def handle_girl_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка типажей девушек"""
-    user_id = update.effective_user.id
-    
-    keyboard = [
-        [InlineKeyboardButton("👑 Контролирующая", callback_data="type_controlling")],
-        [InlineKeyboardButton("🌹 Чувственная", callback_data="type_sensual")],
-        [InlineKeyboardButton("😊 Эмоциональная", callback_data="type_emotional")],
-        [InlineKeyboardButton("🤐 Замкнутая", callback_data="type_closed")],
-        [InlineKeyboardButton("🌸 Молодые", callback_data="type_young")],
-        [InlineKeyboardButton("🔙 Назад в меню", callback_data="back_to_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "👩 **Типажи девушек:**\n\n"
-        "Выбери типаж для изучения стратегий общения:",
-        reply_markup=reply_markup
-    )
-
-async def handle_date_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка тем для свиданий"""
-    user_id = update.effective_user.id
-    
-    prompt = "ТЕМЫ ДЛЯ ПЕРВОГО СВИДАНИЯ: дай мне список оптимальных вопросов и тем для разговора на первом свидании. Какие темы зацепляют, а каких избегать."
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка нажатий на кнопки"""
@@ -1091,12 +795,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
     
-    # Возврат в главное меню
     if data == "back_to_menu":
         await show_main_menu(update, context)
         return
     
-    # Основное меню
     if data.startswith("menu_"):
         menu_type = data.replace("menu_", "")
         
@@ -1130,34 +832,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Стиль общения\n"
                 "• Уровень заинтересованности\n"
                 "• Рекомендации по продолжению",
-                reply_markup=create_back_button()
-            )
-        elif menu_type == "svidanie1":
-            await query.edit_message_text(
-                "🥂 **Первое свидание**\n\n"
-                "Опиши ситуацию для подготовки к первому свиданию.\n\n"
-                "Я дам полную стратегию: место, поведение, темы, как закрыть свидание.",
-                reply_markup=create_back_button()
-            )
-        elif menu_type == "svidanie2":
-            await query.edit_message_text(
-                "🔥 **Второе свидание**\n\n"
-                "Опиши как прошло первое свидание.\n\n"
-                "Дам стратегию для второго: проверка готовности к близости, тактика сближения.",
-                reply_markup=create_back_button()
-            )
-        elif menu_type == "analiz1":
-            await query.edit_message_text(
-                "🧠 **Анализ первого свидания**\n\n"
-                "Расскажи как прошло первое свидание.\n\n"
-                "Проанализирую что прошло хорошо, где были ошибки, почему такая реакция девушки.",
-                reply_markup=create_back_button()
-            )
-        elif menu_type == "analiz2":
-            await query.edit_message_text(
-                "🧠 **Анализ второго свидания**\n\n"
-                "Расскажи как прошло второе свидание.\n\n"
-                "Разберу тактику сближения, причины отказа/согласия, что делать дальше.",
                 reply_markup=create_back_button()
             )
         elif menu_type == "sos":
@@ -1261,7 +935,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=create_back_button()
             )
     
-    # Обработка стилей соблазнения
     elif data.startswith("style_"):
         style_type = data.replace("style_", "")
         style_names = {
@@ -1281,7 +954,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=create_back_button()
         )
     
-    # Обработка типажей девушек
     elif data.startswith("type_"):
         type_name = data.replace("type_", "")
         type_names = {
@@ -1301,7 +973,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=create_back_button()
         )
     
-    # Обработка сигналов заинтересованности
     elif data.startswith("signals_"):
         signal_type = data.replace("signals_", "")
         signal_names = {
@@ -1319,80 +990,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=create_back_button()
         )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка обычных сообщений"""
-    user_id = update.effective_user.id
-    user_message = update.message.text
-    
-    # Проверяем ключевые слова для автоматического распознавания команд
-    if any(word in user_message.lower() for word in ['кейс', 'ситуация', 'проблема']):
-        prompt = f"КЕЙС: {user_message}\n\nРазбери ситуацию и дай конкретные рекомендации."
-    elif any(word in user_message.lower() for word in ['переписка', 'диалог', 'чат']):
-        prompt = f"АНАЛИЗ ПЕРЕПИСКИ: {user_message}\n\nПроанализируй психологию и дай советы."
-    elif any(word in user_message.lower() for word in ['свидание', 'встреча', 'поход']):
-        prompt = f"СВИДАНИЕ: {user_message}\n\nДай стратегию и советы."
-    elif any(word in user_message.lower() for word in ['стиль', 'подонок', 'романтик', 'провокатор']):
-        prompt = f"СТИЛИ СОБЛАЗНЕНИЯ: {user_message}\n\nРасскажи о подходящем стиле и техниках."
-    elif any(word in user_message.lower() for word in ['история', 'расскажи про', 'придумай историю']):
-        prompt = f"СОЗДАНИЕ ИСТОРИИ: {user_message}\n\nСоздай увлекательную историю под ситуацию."
-    elif any(word in user_message.lower() for word in ['типаж', 'тип девушки', 'психотип']):
-        prompt = f"ТИПАЖ ДЕВУШКИ: {user_message}\n\nОпредели типаж и дай стратегию общения."
-    else:
-        prompt = user_message
-    
-    # Обновляем статистику взаимодействий
-    assistant.memory.update_user_stats(user_id, 'interactions')
-    
-    response = await assistant.process_message(user_id, prompt)
-    await update.message.reply_text(response)
-
 def main():
     """Основная функция запуска бота"""
-    # Проверяем наличие API ключа
     if not config.OPENAI_API_KEY:
         logger.error("OPENAI_API_KEY не установлен!")
         return
     
-    # Создаем приложение
     application = Application.builder().token(config.TELEGRAM_TOKEN).build()
     
-    # Добавляем обработчики команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", show_main_menu))
-    application.add_handler(CommandHandler("case", handle_keis))
-    application.add_handler(CommandHandler("chat", handle_perepisca))
-    application.add_handler(CommandHandler("reply", handle_otvet))
-    application.add_handler(CommandHandler("date1", handle_svidanie1))
-    application.add_handler(CommandHandler("date2", handle_svidanie2))
-    application.add_handler(CommandHandler("analyze1", handle_analiz1))
-    application.add_handler(CommandHandler("analyze2", handle_analiz2))
-    application.add_handler(CommandHandler("knowledge", handle_znanie))
-    application.add_handler(CommandHandler("наука", handle_nauka))
-    application.add_handler(CommandHandler("coach", handle_nastavnik))
-    application.add_handler(CommandHandler("психотип", handle_psychotype))
     
-    # Новые команды
-    application.add_handler(CommandHandler("sos", handle_sos_signals))
-    application.add_handler(CommandHandler("стили", handle_seduction_styles))
-    application.add_handler(CommandHandler("истории", handle_stories))
-    application.add_handler(CommandHandler("сигналы", handle_interest_signals))
-    application.add_handler(CommandHandler("типажи", handle_girl_types))
-    application.add_handler(CommandHandler("темы", handle_date_topics))
-    
-    # Обработчики контента
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запускаем бота
     logger.info("Запуск LESLI45BOT 2.0...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
-
-from aiogram import types
-
-@dp.message_handler(commands=["start"])
-async def cmd_start(message: types.Message):
-    await message.answer("Привет! Я Лесли-бот. Готов помогать тебе разбирать кейсы и становиться мастером игры 😉")
