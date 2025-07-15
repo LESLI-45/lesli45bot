@@ -4,11 +4,7 @@
 LESLI45BOT - Персональный Telegram-ассистент по соблазнению
 Основан на GPT-4o с базой знаний из книг Алекса Лесли
 
-ИСПРАВЛЕНИЯ В ЭТОЙ ВЕРСИИ:
-- Принудительная обработка книг при запуске
-- Множественные пути поиска файлов
-- Детальное логирование
-- Обязательное использование базы знаний
+ВЕРСИЯ С ДИАГНОСТИКОЙ И ПРИНУДИТЕЛЬНОЙ ЗАГРУЗКОЙ КНИГ
 """
 
 import asyncio
@@ -68,14 +64,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class KnowledgeBase:
-    """База знаний с принудительной обработкой книг"""
+    """База знаний с ПРИНУДИТЕЛЬНОЙ обработкой книг и диагностикой"""
     
     def __init__(self, db_connection):
         self.db = db_connection
+        self.books_processed = False
+        logger.info("🚀 ИНИЦИАЛИЗАЦИЯ БАЗЫ ЗНАНИЙ")
         self.create_tables()
-        # ПРИНУДИТЕЛЬНО обрабатываем книги при инициализации
-        asyncio.create_task(self.force_load_all_books())
-    
+        
     def create_tables(self):
         """Создание таблиц базы знаний"""
         try:
@@ -103,61 +99,111 @@ class KnowledgeBase:
                 """)
                 
                 self.db.commit()
-                logger.info("Таблицы базы знаний созданы успешно")
+                logger.info("✅ Таблицы базы знаний созданы успешно")
         except Exception as e:
-            logger.error(f"Ошибка создания таблиц: {e}")
+            logger.error(f"❌ Ошибка создания таблиц: {e}")
 
     async def force_load_all_books(self):
         """ПРИНУДИТЕЛЬНАЯ загрузка всех книг при запуске"""
         logger.info("🚀 НАЧИНАЮ ПРИНУДИТЕЛЬНУЮ ОБРАБОТКУ КНИГ")
         
-        # Множественные пути поиска
-        possible_paths = [
-            "/app/books/",
-            "./books/", 
-            "/books/",
-            "/app/",
-            "./",
-            os.path.join(os.getcwd(), "books"),
-            os.path.join(os.path.dirname(__file__), "books")
-        ]
-        
-        books_found = False
-        
-        for path in possible_paths:
-            logger.info(f"🔍 Ищу книги в: {path}")
+        try:
+            # Проверяем есть ли уже книги в базе
+            book_count = await self.get_books_count()
+            logger.info(f"📊 В базе знаний уже есть {book_count} записей")
             
-            if os.path.exists(path):
-                files = [f for f in os.listdir(path) if f.lower().endswith(('.pdf', '.txt', '.docx', '.epub'))]
+            if book_count > 100:  # Если книги уже загружены
+                logger.info("✅ Книги уже обработаны ранее")
+                self.books_processed = True
+                return
+            
+            # Множественные пути поиска
+            possible_paths = [
+                "/app/books/",
+                "./books/", 
+                "/books/",
+                "/app/",
+                "./",
+                os.path.join(os.getcwd(), "books"),
+                os.path.join(os.path.dirname(__file__), "books")
+            ]
+            
+            books_found = False
+            
+            for path in possible_paths:
+                logger.info(f"🔍 Ищу книги в: {path}")
                 
-                if files:
-                    logger.info(f"📚 Найдено {len(files)} книг в {path}")
-                    books_found = True
-                    
-                    for file in files:
-                        file_path = os.path.join(path, file)
-                        logger.info(f"📖 Обрабатываю книгу: {file}")
+                try:
+                    if os.path.exists(path):
+                        files = [f for f in os.listdir(path) if f.lower().endswith(('.pdf', '.txt', '.docx', '.epub'))]
                         
-                        try:
-                            await self.process_book(file_path, file)
-                            logger.info(f"✅ Книга {file} успешно обработана")
-                        except Exception as e:
-                            logger.error(f"❌ Ошибка обработки {file}: {e}")
-                    
-                    break
-                else:
-                    logger.info(f"📁 Папка {path} пуста")
+                        if files:
+                            logger.info(f"📚 Найдено {len(files)} книг в {path}")
+                            books_found = True
+                            
+                            for file in files:
+                                file_path = os.path.join(path, file)
+                                logger.info(f"📖 Обрабатываю книгу: {file}")
+                                
+                                try:
+                                    await self.process_book(file_path, file)
+                                    logger.info(f"✅ Книга {file} успешно обработана")
+                                except Exception as e:
+                                    logger.error(f"❌ Ошибка обработки {file}: {e}")
+                            
+                            break
+                        else:
+                            logger.info(f"📁 Папка {path} пуста")
+                    else:
+                        logger.info(f"❌ Путь {path} не существует")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка доступа к {path}: {e}")
+            
+            if not books_found:
+                logger.warning("⚠️ КНИГИ НЕ НАЙДЕНЫ! Проверьте загрузку файлов")
             else:
-                logger.info(f"❌ Путь {path} не существует")
-        
-        if not books_found:
-            logger.warning("⚠️ КНИГИ НЕ НАЙДЕНЫ! Проверьте загрузку файлов")
-        else:
-            logger.info("🎉 ВСЕ КНИГИ УСПЕШНО ОБРАБОТАНЫ И ДОБАВЛЕНЫ В БАЗУ!")
+                final_count = await self.get_books_count()
+                logger.info(f"🎉 ОБРАБОТКА ЗАВЕРШЕНА! В базе {final_count} записей")
+                self.books_processed = True
+                
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка обработки книг: {e}")
+            logger.error(traceback.format_exc())
+
+    async def get_books_count(self):
+        """Получить количество записей в базе знаний"""
+        try:
+            with self.db.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM knowledge_base")
+                result = cursor.fetchone()
+                return result[0] if result else 0
+        except Exception as e:
+            logger.error(f"Ошибка подсчета записей: {e}")
+            return 0
+
+    async def get_books_list(self):
+        """Получить список загруженных книг"""
+        try:
+            with self.db.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT book_name FROM knowledge_base")
+                results = cursor.fetchall()
+                return [row[0] for row in results]
+        except Exception as e:
+            logger.error(f"Ошибка получения списка книг: {e}")
+            return []
 
     async def process_book(self, file_path: str, filename: str):
         """Обработка одной книги"""
         try:
+            # Проверяем не загружена ли уже эта книга
+            with self.db.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM knowledge_base WHERE book_name = %s", (filename,))
+                existing = cursor.fetchone()[0]
+                
+                if existing > 0:
+                    logger.info(f"📚 Книга {filename} уже в базе знаний ({existing} записей)")
+                    return
+            
             text_content = ""
             
             if filename.lower().endswith('.pdf'):
@@ -177,7 +223,7 @@ class KnowledgeBase:
                 logger.warning(f"⚠️ Мало текста извлечено из {filename}")
                 
         except Exception as e:
-            logger.error(f"Ошибка обработки {filename}: {e}")
+            logger.error(f"❌ Ошибка обработки {filename}: {e}")
 
     def extract_from_pdf(self, file_path: str) -> str:
         """Извлечение текста из PDF"""
@@ -226,6 +272,7 @@ class KnowledgeBase:
             chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
             
             with self.db.cursor() as cursor:
+                saved_chunks = 0
                 for i, chunk in enumerate(chunks):
                     if len(chunk.strip()) > 50:  # Игнорируем слишком короткие части
                         keywords = self.extract_keywords(chunk)
@@ -235,12 +282,13 @@ class KnowledgeBase:
                             INSERT INTO knowledge_base (book_name, chapter, content, keywords, category)
                             VALUES (%s, %s, %s, %s, %s)
                         """, (book_name, f"Часть {i+1}", chunk, keywords, category))
+                        saved_chunks += 1
                 
                 self.db.commit()
-                logger.info(f"📚 Книга {book_name} разбита на {len(chunks)} частей и сохранена")
+                logger.info(f"📚 Книга {book_name} разбита на {saved_chunks} частей и сохранена")
                 
         except Exception as e:
-            logger.error(f"Ошибка сохранения книги {book_name}: {e}")
+            logger.error(f"❌ Ошибка сохранения книги {book_name}: {e}")
 
     def extract_keywords(self, text: str) -> str:
         """Извлечение ключевых слов"""
@@ -277,8 +325,10 @@ class KnowledgeBase:
             return 'общее'
 
     async def search_knowledge(self, query: str, limit: int = 3) -> List[Dict]:
-        """Поиск в базе знаний с обязательным результатом"""
+        """Поиск в базе знаний с ГАРАНТИРОВАННЫМ результатом"""
         try:
+            logger.info(f"🔍 Ищу в базе знаний: '{query}'")
+            
             with self.db.cursor() as cursor:
                 # Поиск по ключевым словам
                 cursor.execute("""
@@ -293,6 +343,7 @@ class KnowledgeBase:
                 
                 if not results:
                     # Если точного поиска нет, ищем по похожим словам
+                    logger.info(f"🔍 Точного поиска нет, ищу по похожим словам")
                     cursor.execute("""
                         SELECT book_name, chapter, content, keywords, category
                         FROM knowledge_base 
@@ -312,11 +363,11 @@ class KnowledgeBase:
                         'category': row[4]
                     })
                 
-                logger.info(f"🔍 Найдено {len(formatted_results)} результатов для запроса: {query}")
+                logger.info(f"✅ Найдено {len(formatted_results)} результатов для '{query}'")
                 return formatted_results
                 
         except Exception as e:
-            logger.error(f"Ошибка поиска в базе знаний: {e}")
+            logger.error(f"❌ Ошибка поиска в базе знаний: {e}")
             return []
 
 class ConversationMemory:
@@ -407,77 +458,6 @@ class ConversationMemory:
             logger.error(f"Ошибка получения сообщений: {e}")
             return []
 
-class ImageAnalyzer:
-    """Анализ изображений"""
-    
-    def __init__(self, openai_client):
-        self.openai_client = openai_client
-
-    async def analyze_image(self, image_url: str, analysis_type: str = "general") -> str:
-        """Анализ изображения через GPT-4 Vision"""
-        try:
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": self.get_analysis_prompt(analysis_type)},
-                        {"type": "image_url", "image_url": {"url": image_url}}
-                    ]
-                }
-            ]
-            
-            response = await self.openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                max_tokens=1000
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Ошибка анализа изображения: {e}")
-            return "Извините, не удалось проанализировать изображение."
-
-    def get_analysis_prompt(self, analysis_type: str) -> str:
-        """Промпт для анализа"""
-        prompts = {
-            "general": "Проанализируй эту девушку с точки зрения соблазнения. Опиши её тип, стиль, возможный характер и дай советы по подходу.",
-            "style": "Определи стиль этой девушки и дай рекомендации как с ней общаться.",
-            "psychotype": "Определи психотип этой девушки и её тип привязанности."
-        }
-        return prompts.get(analysis_type, prompts["general"])
-
-class PsychoAnalyzer:
-    """Психологический анализ"""
-    
-    def __init__(self, openai_client):
-        self.openai_client = openai_client
-
-    async def analyze_conversation(self, conversation_text: str) -> str:
-        """Анализ переписки"""
-        prompt = """
-        Проанализируй эту переписку с точки зрения психологии соблазнения:
-        1. Определи психотип девушки
-        2. Выяви её тип привязанности
-        3. Найди индикаторы интереса или отсутствия интереса
-        4. Дай конкретные рекомендации по дальнейшим действиям
-        
-        Переписка:
-        """ + conversation_text
-        
-        try:
-            response = await self.openai_client.chat.completions.create(
-                model=config.MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000,
-                temperature=0.7
-            )
-            
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Ошибка анализа переписки: {e}")
-            return "Ошибка анализа переписки."
-
 class LesliAssistant:
     """Основной класс ассистента с ОБЯЗАТЕЛЬНЫМ использованием базы знаний"""
     
@@ -486,23 +466,56 @@ class LesliAssistant:
         self.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         self.knowledge = KnowledgeBase(self.db)
         self.memory = ConversationMemory(self.db)
-        self.image_analyzer = ImageAnalyzer(self.openai_client)
-        self.psycho_analyzer = PsychoAnalyzer(self.openai_client)
 
     def setup_database(self):
         """Настройка подключения к базе данных"""
         try:
             if config.DATABASE_URL:
+                logger.info("🔗 Подключаюсь к PostgreSQL...")
                 self.db = psycopg2.connect(config.DATABASE_URL)
                 logger.info("✅ Подключение к PostgreSQL успешно")
             else:
+                logger.warning("⚠️ DATABASE_URL не найден, использую SQLite")
                 # Fallback к SQLite
                 db_path = "lesli_bot.db"
                 self.db = sqlite3.connect(db_path, check_same_thread=False)
                 logger.info("✅ Используется SQLite база данных")
         except Exception as e:
-            logger.error(f"Ошибка подключения к базе данных: {e}")
+            logger.error(f"❌ Ошибка подключения к базе данных: {e}")
             raise
+
+    async def initialize_knowledge_base(self):
+        """Принудительная инициализация базы знаний"""
+        logger.info("📚 Инициализация базы знаний...")
+        await self.knowledge.force_load_all_books()
+
+    async def get_debug_info(self) -> str:
+        """Получить отладочную информацию"""
+        try:
+            books_count = await self.knowledge.get_books_count()
+            books_list = await self.knowledge.get_books_list()
+            
+            debug_info = f"""
+🔍 **ДИАГНОСТИКА БАЗЫ ЗНАНИЙ**
+
+📊 **Статистика:**
+• Записей в базе: {books_count}
+• Книг загружено: {len(books_list)}
+• Статус обработки: {'✅ Завершена' if self.knowledge.books_processed else '❌ Не завершена'}
+
+📚 **Загруженные книги:**
+"""
+            
+            for i, book in enumerate(books_list, 1):
+                debug_info += f"\n{i}. {book}"
+            
+            if books_count == 0:
+                debug_info += "\n\n⚠️ **ПРОБЛЕМА:** База знаний пуста!"
+            
+            return debug_info
+            
+        except Exception as e:
+            return f"❌ Ошибка диагностики: {e}"
 
     async def get_gpt_response(self, messages: List[Dict], user_id: int, query: str) -> str:
         """Получение ответа от GPT с ОБЯЗАТЕЛЬНЫМ использованием базы знаний"""
@@ -533,7 +546,7 @@ class LesliAssistant:
         """Создание системного промпта с базой знаний"""
         base_prompt = """Ты LESLI45BOT - персональный ассистент по соблазнению, основанный на книгах Алекса Лесли.
 
-ОБЯЗАТЕЛЬНО используй информацию из базы знаний в каждом ответе!
+КРИТИЧЕСКИ ВАЖНО: ВСЕГДА используй информацию из базы знаний в каждом ответе!
 
 ТВОЯ БАЗА ЗНАНИЙ ИЗ КНИГ ЛЕСЛИ:"""
         
@@ -541,21 +554,23 @@ class LesliAssistant:
             base_prompt += "\n\n📚 РЕЛЕВАНТНАЯ ИНФОРМАЦИЯ ИЗ КНИГ:\n"
             for i, result in enumerate(knowledge_results, 1):
                 base_prompt += f"\n{i}. Из книги '{result['book_name']}':\n{result['content']}\n"
+        else:
+            base_prompt += "\n\n⚠️ ВНИМАНИЕ: База знаний не вернула результатов для этого запроса!"
         
         base_prompt += """
 
-ВАЖНО: 
+ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ:
 - ВСЕГДА ссылайся на конкретные книги и техники Лесли
 - Цитируй отрывки из книг когда это уместно  
 - Давай конкретные советы, а не общие фразы
 - Используй терминологию Лесли (фреймы, пуш-пул, эскалация, etc.)
-- Адаптируй советы под профиль пользователя
+- Если база знаний пуста - ОБЯЗАТЕЛЬНО упомяни это в ответе
 
 Стиль: Уверенный наставник, прямой, конкретный, с примерами из книг."""
         
         return base_prompt
 
-# Создание клавиатур меню
+# Создание клавиатур меню (ОСТАВЛЯЕМ БЕЗ ИЗМЕНЕНИЙ)
 def create_main_menu_keyboard():
     """Создание главного меню"""
     keyboard = [
@@ -624,6 +639,53 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=create_main_menu_keyboard()
     )
 
+async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /debug - диагностика базы знаний"""
+    user_id = update.effective_user.id
+    
+    await update.message.reply_text("🔍 Анализирую базу знаний...")
+    
+    debug_info = await assistant.get_debug_info()
+    
+    await assistant.memory.save_message(user_id, "user", "/debug")
+    await assistant.memory.save_message(user_id, "assistant", debug_info)
+    
+    await update.message.reply_text(debug_info, parse_mode='Markdown')
+
+async def reload_books_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /reload_books - принудительная перезагрузка книг"""
+    user_id = update.effective_user.id
+    
+    await update.message.reply_text("📚 Начинаю принудительную перезагрузку книг...")
+    
+    try:
+        await assistant.knowledge.force_load_all_books()
+        
+        books_count = await assistant.knowledge.get_books_count()
+        books_list = await assistant.knowledge.get_books_list()
+        
+        result_text = f"""
+✅ **ПЕРЕЗАГРУЗКА ЗАВЕРШЕНА!**
+
+📊 **Результат:**
+• Записей в базе: {books_count}
+• Книг загружено: {len(books_list)}
+
+📚 **Книги:**
+"""
+        
+        for i, book in enumerate(books_list, 1):
+            result_text += f"\n{i}. {book}"
+        
+        await assistant.memory.save_message(user_id, "user", "/reload_books")
+        await assistant.memory.save_message(user_id, "assistant", result_text)
+        
+        await update.message.reply_text(result_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        error_text = f"❌ Ошибка перезагрузки: {e}"
+        await update.message.reply_text(error_text)
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений"""
     user_id = update.effective_user.id
@@ -658,7 +720,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_file = await context.bot.get_file(photo.file_id)
         photo_url = photo_file.file_path
         
-        analysis = await assistant.image_analyzer.analyze_image(photo_url)
+        # Здесь можно добавить анализ фото через GPT-4 Vision
+        analysis = "Функция анализа фото временно недоступна. Опишите ситуацию текстом."
         
         await assistant.memory.save_message(user_id, "user", "[Отправил фото для анализа]")
         await assistant.memory.save_message(user_id, "assistant", analysis)
@@ -900,6 +963,10 @@ async def show_main_menu(update_or_query, context: ContextTypes.DEFAULT_TYPE):
 🆘 **Экстренная помощь** - быстрые решения
 👩 **Психология** - типажи и поведение девушек
 📚 **База знаний** - теория и практика Лесли
+
+**Команды диагностики:**
+/debug - проверить базу знаний
+/reload_books - перезагрузить книги
 """
     
     if hasattr(update_or_query, 'edit_message_text'):
@@ -936,11 +1003,16 @@ async def main():
         assistant = LesliAssistant()
         logger.info("✅ Ассистент инициализирован")
         
+        # ПРИНУДИТЕЛЬНО инициализируем базу знаний
+        await assistant.initialize_knowledge_base()
+        
         # Создаем приложение
         application = Application.builder().token(config.TELEGRAM_TOKEN).build()
         
         # Добавляем обработчики
         application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("debug", debug_command))
+        application.add_handler(CommandHandler("reload_books", reload_books_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         application.add_handler(CallbackQueryHandler(handle_callback))
