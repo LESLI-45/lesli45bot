@@ -251,41 +251,64 @@ class KnowledgeBase:
             return ""
 
     def extract_from_epub(self, file_path: str) -> str:
-        """Извлечение текста из EPUB"""
+        """Извлечение текста из EPUB (с проверкой BeautifulSoup)"""
         try:
             book = epub.read_epub(file_path)
             text = ""
             for item in book.get_items():
                 if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                    soup = BeautifulSoup(item.get_content(), 'html.parser')
-                    text += soup.get_text() + "\n"
+                    content = item.get_content().decode('utf-8')
+                    # Простое удаление HTML тегов без BeautifulSoup
+                    import re
+                    clean_text = re.sub(r'<[^>]+>', '', content)
+                    text += clean_text + "\n"
             return text
         except Exception as e:
             logger.error(f"Ошибка чтения EPUB {file_path}: {e}")
             return ""
 
     async def save_book_content(self, book_name: str, content: str):
-        """Сохранение содержимого книги в базу"""
+        """Сохранение содержимого книги в базу с переподключением"""
         try:
             # Разбиваем на части по ~1000 символов
             chunk_size = 1000
             chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
             
-            with self.db.cursor() as cursor:
-                saved_chunks = 0
-                for i, chunk in enumerate(chunks):
-                    if len(chunk.strip()) > 50:  # Игнорируем слишком короткие части
-                        keywords = self.extract_keywords(chunk)
-                        category = self.determine_category(chunk)
-                        
-                        cursor.execute("""
-                            INSERT INTO knowledge_base (book_name, chapter, content, keywords, category)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, (book_name, f"Часть {i+1}", chunk, keywords, category))
-                        saved_chunks += 1
-                
-                self.db.commit()
-                logger.info(f"📚 Книга {book_name} разбита на {saved_chunks} частей и сохранена")
+            saved_chunks = 0
+            
+            for i, chunk in enumerate(chunks):
+                if len(chunk.strip()) > 50:  # Игнорируем слишком короткие части
+                    keywords = self.extract_keywords(chunk)
+                    category = self.determine_category(chunk)
+                    
+                    # Попытка сохранить с переподключением
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            with self.db.cursor() as cursor:
+                                cursor.execute("""
+                                    INSERT INTO knowledge_base (book_name, chapter, content, keywords, category)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                """, (book_name, f"Часть {i+1}", chunk, keywords, category))
+                                self.db.commit()
+                                saved_chunks += 1
+                                break  # Успешно сохранено
+                                
+                        except Exception as e:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"⚠️ Ошибка сохранения части {i+1}, попытка {attempt+1}: {e}")
+                                # Пытаемся переподключиться к базе
+                                try:
+                                    self.db.close()
+                                    if config.DATABASE_URL:
+                                        self.db = psycopg2.connect(config.DATABASE_URL)
+                                    await asyncio.sleep(1)  # Небольшая задержка
+                                except:
+                                    pass
+                            else:
+                                logger.error(f"❌ Не удалось сохранить часть {i+1} после {max_retries} попыток: {e}")
+            
+            logger.info(f"📚 Книга {book_name} разбита на {saved_chunks} частей и сохранена")
                 
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения книги {book_name}: {e}")
@@ -468,21 +491,39 @@ class LesliAssistant:
         self.memory = ConversationMemory(self.db)
 
     def setup_database(self):
-        """Настройка подключения к базе данных"""
-        try:
-            if config.DATABASE_URL:
-                logger.info("🔗 Подключаюсь к PostgreSQL...")
-                self.db = psycopg2.connect(config.DATABASE_URL)
-                logger.info("✅ Подключение к PostgreSQL успешно")
-            else:
-                logger.warning("⚠️ DATABASE_URL не найден, использую SQLite")
-                # Fallback к SQLite
-                db_path = "lesli_bot.db"
-                self.db = sqlite3.connect(db_path, check_same_thread=False)
-                logger.info("✅ Используется SQLite база данных")
-        except Exception as e:
-            logger.error(f"❌ Ошибка подключения к базе данных: {e}")
-            raise
+        """Настройка подключения к базе данных с retry"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if config.DATABASE_URL:
+                    logger.info("🔗 Подключаюсь к PostgreSQL...")
+                    self.db = psycopg2.connect(
+                        config.DATABASE_URL,
+                        connect_timeout=30,
+                        keepalives_idle=30,
+                        keepalives_interval=5,
+                        keepalives_count=5
+                    )
+                    # Устанавливаем autocommit для стабильности
+                    self.db.autocommit = True
+                    logger.info("✅ Подключение к PostgreSQL успешно")
+                    return
+                else:
+                    logger.warning("⚠️ DATABASE_URL не найден, использую SQLite")
+                    # Fallback к SQLite
+                    db_path = "lesli_bot.db"
+                    self.db = sqlite3.connect(db_path, check_same_thread=False)
+                    logger.info("✅ Используется SQLite база данных")
+                    return
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ Ошибка подключения к базе данных, попытка {attempt+1}: {e}")
+                    import time
+                    time.sleep(2)
+                else:
+                    logger.error(f"❌ Критическая ошибка подключения к базе данных: {e}")
+                    raise
 
     async def initialize_knowledge_base(self):
         """Принудительная инициализация базы знаний"""
