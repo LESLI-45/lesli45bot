@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: lesli45bot
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: ""
+    startCommand: python lesli45bot.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        fromEnvVar: TELEGRAM_TOKEN
+      - key: OPENAI_API_KEY
+        fromEnvVar: OPENAI_API_KEY
+      - key: DATABASE_URL
+        fromEnvVar: DATABASE_URL
+pythonVersion: 3.10.13
