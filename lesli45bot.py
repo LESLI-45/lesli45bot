@@ -3,7 +3,7 @@
 """
 LESLI45BOT - Персональный Telegram-ассистент по соблазнению
 Основан на GPT-4o с базой знаний из книг Алекса Лесли
-WEBHOOK VERSION для Render
+POLLING VERSION для Render
 """
 
 import asyncio
@@ -38,10 +38,6 @@ import re
 from PIL import Image
 import base64
 
-# Web server для webhook
-from flask import Flask, request, jsonify
-import threading
-
 # Configuration
 try:
     from config import config
@@ -66,9 +62,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Flask app для webhook
-app = Flask(__name__)
 
 class KnowledgeBase:
     """Класс для работы с базой знаний из книг"""
@@ -968,49 +961,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка обработки фото: {e}")
         await update.message.reply_text("Не могу проанализировать фото. Попробуйте еще раз.")
 
-# Webhook обработчик
-@app.route(f'/webhook/{config.TELEGRAM_TOKEN}', methods=['POST'])
-def webhook():
-    """Обработка webhook от Telegram"""
-    try:
-        update = Update.de_json(request.get_json(), telegram_app.bot)
-        telegram_app.process_update(update)
-        return jsonify({'status': 'ok'})
-    except Exception as e:
-        logger.error(f"Ошибка webhook: {e}")
-        return jsonify({'status': 'error'}), 500
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check для Render"""
-    return jsonify({'status': 'healthy'})
-
-# Глобальная переменная для Telegram приложения
-telegram_app = None
-
-async def setup_telegram_app():
-    """Настройка Telegram приложения"""
-    global telegram_app
-    
-    # Создаем приложение
-    telegram_app = Application.builder().token(config.TELEGRAM_TOKEN).build()
-    
-    # Добавляем обработчики
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(CallbackQueryHandler(handle_callback))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    # Инициализируем приложение
-    await telegram_app.initialize()
-    
-    # Устанавливаем webhook
-    webhook_url = f"https://lesli45bot.onrender.com/webhook/{config.TELEGRAM_TOKEN}"
-    await telegram_app.bot.set_webhook(webhook_url)
-    
-    logger.info(f"🌐 Webhook установлен: {webhook_url}")
-
-def main():
+async def main():
     """Главная функция"""
     try:
         # Проверяем наличие токенов
@@ -1025,21 +976,26 @@ def main():
         logger.info("🚀 Запускаю LESLI45BOT 2.0...")
         
         # Инициализируем базу данных
-        asyncio.run(assistant.initialize_database())
+        await assistant.initialize_database()
         
-        # Настраиваем Telegram приложение
-        asyncio.run(setup_telegram_app())
+        # Создаем приложение
+        application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+        
+        # Добавляем обработчики
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CallbackQueryHandler(handle_callback))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         
         logger.info("✅ Обработчики добавлены")
         logger.info("🎉 LESLI45BOT 2.0 запущен и готов к работе!")
         
-        # Запускаем Flask сервер
-        port = int(os.environ.get('PORT', 5000))
-        app.run(host='0.0.0.0', port=port, debug=False)
+        # Запускаем бота через polling
+        await application.run_polling(allowed_updates=Update.ALL_TYPES)
         
     except Exception as e:
         logger.error(f"❌ Критическая ошибка запуска: {e}")
         logger.error(traceback.format_exc())
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
