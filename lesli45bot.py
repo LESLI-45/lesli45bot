@@ -3,6 +3,7 @@
 """
 LESLI45BOT - Персональный Telegram-ассистент по соблазнению
 ВЕРСИЯ БЕЗ OPENAI - с готовыми ответами из книг Лесли
+ИСПРАВЛЕНИЕ WEBHOOK КОНФЛИКТА
 """
 
 import logging
@@ -119,6 +120,20 @@ def create_main_menu():
         markup.add(types.InlineKeyboardButton(text, callback_data=callback))
     
     return markup
+
+def delete_webhook():
+    """Удаление webhook перед запуском polling"""
+    try:
+        logger.info("🔄 Удаление webhook...")
+        result = bot.delete_webhook(drop_pending_updates=True)
+        if result:
+            logger.info("✅ Webhook успешно удален")
+        else:
+            logger.info("ℹ️ Webhook не был установлен")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления webhook: {e}")
+        return False
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -260,11 +275,17 @@ def handle_photo(message):
 if __name__ == "__main__":
     try:
         logger.info("🚀 LESLI45BOT запускается...")
+        
+        # КРИТИЧЕСКИ ВАЖНО - удаление webhook перед polling
+        webhook_deleted = delete_webhook()
+        if not webhook_deleted:
+            logger.warning("⚠️ Не удалось удалить webhook, но продолжаем...")
+        
         logger.info("📚 База знаний Лесли загружена")
         logger.info("✅ Все компоненты инициализированы")
         logger.info("🤖 Бот готов к работе!")
         
-        # Запуск бота
+        # Запуск бота с обработкой ошибок
         bot.polling(none_stop=True, interval=1, timeout=30)
         
     except Exception as e:
