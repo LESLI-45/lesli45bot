@@ -3,21 +3,21 @@
 """
 LESLI45BOT - Персональный Telegram-ассистент по соблазнению
 Основан на GPT-4o с базой знаний из книг Алекса Лесли
-POLLING VERSION для Render
+TELEBOT VERSION - простая и надежная
 """
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
-import json
 import os
 import sys
 import traceback
+import threading
+import time
 from typing import Optional, List, Dict, Any
 
-# Telegram Bot API
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+# Telegram Bot API (простая библиотека)
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 
 # OpenAI API
 from openai import AsyncOpenAI
@@ -37,24 +37,19 @@ import re
 # Image processing
 from PIL import Image
 import base64
+import requests
 
 # Configuration
-try:
-    from config import config
-except ImportError:
-    class Config:
-        def __init__(self):
-            self.TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-            self.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-            self.DATABASE_URL = os.getenv('DATABASE_URL')
-            self.MODEL = "gpt-4o"
-            self.MAX_TOKENS = 2000
-            self.TEMPERATURE = 0.7
-            
-        def __getattr__(self, name):
-            return os.getenv(name)
-    
-    config = Config()
+class Config:
+    def __init__(self):
+        self.TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+        self.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+        self.DATABASE_URL = os.getenv('DATABASE_URL')
+        self.MODEL = "gpt-4o"
+        self.MAX_TOKENS = 2000
+        self.TEMPERATURE = 0.7
+
+config = Config()
 
 # Logging
 logging.basicConfig(
@@ -62,6 +57,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Создаем бота
+bot = telebot.TeleBot(config.TELEGRAM_TOKEN)
 
 class KnowledgeBase:
     """Класс для работы с базой знаний из книг"""
@@ -88,11 +86,23 @@ class KnowledgeBase:
                     CREATE INDEX IF NOT EXISTS idx_keywords ON knowledge_base(keywords)
                 ''')
                 self.db.commit()
+                logger.info("✅ SQLite таблицы созданы")
             else:
-                # PostgreSQL
-                asyncio.create_task(self._create_postgres_tables())
+                # PostgreSQL - создаем в отдельном потоке
+                threading.Thread(target=self._create_postgres_tables_sync).start()
         except Exception as e:
             logger.error(f"Ошибка создания таблиц: {e}")
+    
+    def _create_postgres_tables_sync(self):
+        """Создание таблиц PostgreSQL синхронно"""
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self._create_postgres_tables())
+            loop.close()
+        except Exception as e:
+            logger.error(f"Ошибка создания PostgreSQL таблиц: {e}")
     
     async def _create_postgres_tables(self):
         """Создание таблиц в PostgreSQL"""
@@ -109,12 +119,12 @@ class KnowledgeBase:
             await self.db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_keywords ON knowledge_base(keywords)
             ''')
-            logger.info("✅ Таблицы базы знаний созданы успешно")
+            logger.info("✅ PostgreSQL таблицы созданы")
         except Exception as e:
             logger.error(f"Ошибка создания PostgreSQL таблиц: {e}")
     
-    async def search_knowledge(self, query: str, limit: int = 5) -> List[Dict]:
-        """Поиск в базе знаний"""
+    def search_knowledge_sync(self, query: str, limit: int = 5) -> List[Dict]:
+        """Синхронный поиск в базе знаний"""
         try:
             keywords = query.lower().split()
             
@@ -133,37 +143,59 @@ class KnowledgeBase:
                 results = cursor.fetchall()
                 return [{'book': row[0], 'content': row[1]} for row in results]
             else:
-                # PostgreSQL
-                placeholders = ' OR '.join(['content ILIKE $' + str(i+1) for i in range(len(keywords))])
-                search_terms = [f'%{keyword}%' for keyword in keywords]
-                
-                query_sql = f'''
-                    SELECT book_name, content FROM knowledge_base 
-                    WHERE {placeholders}
-                    ORDER BY created_at DESC
-                    LIMIT ${len(keywords)+1}
-                '''
-                
-                results = await self.db.fetch(query_sql, *search_terms, limit)
-                return [{'book': row['book_name'], 'content': row['content']} for row in results]
+                # PostgreSQL - используем синхронную обертку
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(self.search_knowledge_async(query, limit))
+                    return result
+                finally:
+                    loop.close()
                 
         except Exception as e:
             logger.error(f"Ошибка поиска в базе знаний: {e}")
             return []
     
-    async def force_load_all_books(self):
-        """Принудительная загрузка всех книг"""
-        logger.info("🚀 НАЧИНАЮ ПРИНУДИТЕЛЬНУЮ ОБРАБОТКУ КНИГ")
-        
+    async def search_knowledge_async(self, query: str, limit: int = 5) -> List[Dict]:
+        """Асинхронный поиск в PostgreSQL"""
         try:
+            keywords = query.lower().split()
+            placeholders = ' OR '.join(['content ILIKE $' + str(i+1) for i in range(len(keywords))])
+            search_terms = [f'%{keyword}%' for keyword in keywords]
+            
+            query_sql = f'''
+                SELECT book_name, content FROM knowledge_base 
+                WHERE {placeholders}
+                ORDER BY created_at DESC
+                LIMIT ${len(keywords)+1}
+            '''
+            
+            results = await self.db.fetch(query_sql, *search_terms, limit)
+            return [{'book': row['book_name'], 'content': row['content']} for row in results]
+        except Exception as e:
+            logger.error(f"Ошибка поиска в PostgreSQL: {e}")
+            return []
+    
+    def force_load_all_books_sync(self):
+        """Синхронная загрузка книг"""
+        try:
+            logger.info("🚀 НАЧИНАЮ ПРИНУДИТЕЛЬНУЮ ОБРАБОТКУ КНИГ")
+            
             # Проверяем есть ли уже книги
+            count = 0
             if isinstance(self.db, sqlite3.Connection):
                 cursor = self.db.cursor()
                 cursor.execute("SELECT COUNT(*) FROM knowledge_base")
                 count = cursor.fetchone()[0]
             else:
-                result = await self.db.fetchrow("SELECT COUNT(*) FROM knowledge_base")
-                count = result[0] if result else 0
+                # PostgreSQL
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(self.db.fetchrow("SELECT COUNT(*) FROM knowledge_base"))
+                    count = result[0] if result else 0
+                finally:
+                    loop.close()
             
             logger.info(f"📊 В базе знаний уже есть {count} записей")
             
@@ -198,7 +230,7 @@ class KnowledgeBase:
                                 content = self.extract_text_from_file(file_path)
                                 
                                 if content:
-                                    await self.save_book_content(file, content)
+                                    self.save_book_content_sync(file, content)
                                     books_processed += 1
                                     logger.info(f"✅ Книга {file} обработана успешно")
                                     
@@ -281,8 +313,8 @@ class KnowledgeBase:
             logger.error(f"Ошибка EPUB {file_path}: {e}")
             return ""
     
-    async def save_book_content(self, book_name: str, content: str):
-        """Сохранение содержимого книги в базу"""
+    def save_book_content_sync(self, book_name: str, content: str):
+        """Синхронное сохранение содержимого книги"""
         try:
             # Разбиваем на части по ~1000 символов
             chunk_size = 1000
@@ -300,10 +332,16 @@ class KnowledgeBase:
                         ''', (book_name, chunk, keywords))
                         self.db.commit()
                     else:
-                        await self.db.execute('''
-                            INSERT INTO knowledge_base (book_name, content, keywords)
-                            VALUES ($1, $2, $3)
-                        ''', book_name, chunk, keywords)
+                        # PostgreSQL
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(self.db.execute('''
+                                INSERT INTO knowledge_base (book_name, content, keywords)
+                                VALUES ($1, $2, $3)
+                            ''', book_name, chunk, keywords))
+                        finally:
+                            loop.close()
             
             logger.info(f"📚 Книга {book_name} разбита на {len(chunks)} частей и сохранена")
                         
@@ -313,11 +351,9 @@ class KnowledgeBase:
     def extract_keywords(self, text: str) -> str:
         """Извлечение ключевых слов из текста"""
         try:
-            # Простое извлечение ключевых слов
             words = re.findall(r'\b\w+\b', text.lower())
-            # Фильтруем слова длиннее 3 символов
             keywords = [word for word in words if len(word) > 3]
-            return ' '.join(keywords[:20])  # Первые 20 ключевых слов
+            return ' '.join(keywords[:20])
         except Exception as e:
             logger.error(f"Ошибка извлечения ключевых слов: {e}")
             return ""
@@ -344,9 +380,20 @@ class ConversationMemory:
                     )
                 ''')
                 self.db.commit()
+                logger.info("✅ Таблицы памяти созданы")
             else:
                 # PostgreSQL
-                asyncio.create_task(self._create_postgres_memory_tables())
+                threading.Thread(target=self._create_postgres_memory_tables_sync).start()
+        except Exception as e:
+            logger.error(f"Ошибка создания таблиц памяти: {e}")
+    
+    def _create_postgres_memory_tables_sync(self):
+        """Создание таблиц памяти PostgreSQL синхронно"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self._create_postgres_memory_tables())
+            loop.close()
         except Exception as e:
             logger.error(f"Ошибка создания таблиц памяти: {e}")
     
@@ -362,12 +409,12 @@ class ConversationMemory:
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            logger.info("✅ Таблицы памяти созданы успешно")
+            logger.info("✅ Таблицы памяти PostgreSQL созданы")
         except Exception as e:
-            logger.error(f"Ошибка создания таблиц памяти: {e}")
+            logger.error(f"Ошибка создания таблиц памяти PostgreSQL: {e}")
     
-    async def save_message(self, user_id: int, role: str, message: str):
-        """Сохранение сообщения в память"""
+    def save_message_sync(self, user_id: int, role: str, message: str):
+        """Синхронное сохранение сообщения"""
         try:
             if isinstance(self.db, sqlite3.Connection):
                 cursor = self.db.cursor()
@@ -377,15 +424,21 @@ class ConversationMemory:
                 ''', (user_id, role, message))
                 self.db.commit()
             else:
-                await self.db.execute('''
-                    INSERT INTO conversations (user_id, role, message)
-                    VALUES ($1, $2, $3)
-                ''', user_id, role, message)
+                # PostgreSQL
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self.db.execute('''
+                        INSERT INTO conversations (user_id, role, message)
+                        VALUES ($1, $2, $3)
+                    ''', user_id, role, message))
+                finally:
+                    loop.close()
         except Exception as e:
             logger.error(f"Ошибка сохранения сообщения: {e}")
     
-    async def get_conversation_history(self, user_id: int, limit: int = 10) -> List[Dict]:
-        """Получение истории разговора"""
+    def get_conversation_history_sync(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """Синхронное получение истории разговора"""
         try:
             if isinstance(self.db, sqlite3.Connection):
                 cursor = self.db.cursor()
@@ -399,114 +452,23 @@ class ConversationMemory:
                 results = cursor.fetchall()
                 return [{'role': row[0], 'content': row[1]} for row in reversed(results)]
             else:
-                results = await self.db.fetch('''
-                    SELECT role, message FROM conversations 
-                    WHERE user_id = $1 
-                    ORDER BY timestamp DESC 
-                    LIMIT $2
-                ''', user_id, limit)
-                
-                return [{'role': row['role'], 'content': row['message']} for row in reversed(results)]
+                # PostgreSQL
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    results = loop.run_until_complete(self.db.fetch('''
+                        SELECT role, message FROM conversations 
+                        WHERE user_id = $1 
+                        ORDER BY timestamp DESC 
+                        LIMIT $2
+                    ''', user_id, limit))
+                    
+                    return [{'role': row['role'], 'content': row['message']} for row in reversed(results)]
+                finally:
+                    loop.close()
         except Exception as e:
             logger.error(f"Ошибка получения истории: {e}")
             return []
-
-class ImageAnalyzer:
-    """Класс для анализа изображений"""
-    
-    def __init__(self):
-        self.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-    
-    async def analyze_image(self, image_data: bytes, context: str = "") -> str:
-        """Анализ изображения с помощью GPT-4 Vision"""
-        try:
-            # Конвертируем изображение в base64
-            image = Image.open(BytesIO(image_data))
-            
-            # Ужимаем изображение если слишком большое
-            if image.size[0] > 1024 or image.size[1] > 1024:
-                image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-            
-            # Конвертируем в base64
-            buffered = BytesIO()
-            image.save(buffered, format="JPEG")
-            image_base64 = base64.b64encode(buffered.getvalue()).decode()
-            
-            # Системный промпт для анализа фото
-            system_prompt = f"""Ты эксперт по анализу фотографий в контексте соблазнения и психологии.
-            
-            Анализируй фото девушки с точки зрения:
-            1. Психотип личности
-            2. Эмоциональное состояние 
-            3. Стиль и самопрезентация
-            4. Подходящие стратегии общения
-            
-            Контекст: {context}
-            
-            Давай конкретные практические советы по соблазнению."""
-            
-            response = await self.openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_base64}"
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": "Проанализируй это фото и дай советы по соблазнению"
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=1000
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Ошибка анализа изображения: {e}")
-            return "Извините, не могу проанализировать изображение. Попробуйте еще раз."
-
-class PsychoAnalyzer:
-    """Класс для психологического анализа"""
-    
-    def __init__(self):
-        self.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-    
-    async def analyze_psychology(self, text: str, context: str = "") -> str:
-        """Психологический анализ текста/ситуации"""
-        try:
-            system_prompt = """Ты эксперт психолог с глубокими знаниями в области:
-            - Теории привязанности
-            - Психотипологии
-            - Эмоциональной психологии
-            - Социальной динамики
-            - Поведенческих паттернов
-            
-            Анализируй ситуации с научной точки зрения и давай практические рекомендации."""
-            
-            response = await self.openai_client.chat.completions.create(
-                model=config.MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Контекст: {context}\n\nАнализируй: {text}"}
-                ],
-                max_tokens=config.MAX_TOKENS,
-                temperature=config.TEMPERATURE
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Ошибка психологического анализа: {e}")
-            return "Извините, произошла ошибка при анализе. Попробуйте еще раз."
 
 class LesliAssistant:
     """Главный класс бота-ассистента"""
@@ -516,60 +478,67 @@ class LesliAssistant:
         self.db = None
         self.knowledge = None
         self.memory = None
-        self.image_analyzer = ImageAnalyzer()
-        self.psycho_analyzer = PsychoAnalyzer()
+        self.initialize_database()
     
-    async def initialize_database(self):
-        """Инициализация базы данных"""
+    def initialize_database(self):
+        """Синхронная инициализация базы данных"""
         try:
             if config.DATABASE_URL and config.DATABASE_URL.startswith('postgresql'):
                 logger.info("🔗 Подключаюсь к PostgreSQL...")
-                self.db = await asyncpg.connect(config.DATABASE_URL)
+                # Создаем подключение в отдельном потоке
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self.db = loop.run_until_complete(asyncpg.connect(config.DATABASE_URL))
                 logger.info("✅ Подключение к PostgreSQL успешно")
             else:
                 logger.info("🔗 Использую SQLite базу данных")
-                self.db = sqlite3.connect('lesli_bot.db')
+                self.db = sqlite3.connect('lesli_bot.db', check_same_thread=False)
                 
             self.knowledge = KnowledgeBase(self.db)
             self.memory = ConversationMemory(self.db)
             
-            # Загружаем книги при инициализации
-            await self.initialize_knowledge_base()
+            # Загружаем книги
+            self.initialize_knowledge_base()
             
         except Exception as e:
             logger.error(f"❌ Ошибка подключения к базе данных: {e}")
             # Fallback к SQLite
-            self.db = sqlite3.connect('lesli_bot.db')
+            self.db = sqlite3.connect('lesli_bot.db', check_same_thread=False)
             self.knowledge = KnowledgeBase(self.db)
             self.memory = ConversationMemory(self.db)
     
-    async def initialize_knowledge_base(self):
+    def initialize_knowledge_base(self):
         """Инициализация базы знаний"""
         logger.info("📚 Инициализация базы знаний...")
-        await self.knowledge.force_load_all_books()
+        threading.Thread(target=self.knowledge.force_load_all_books_sync).start()
     
-    async def get_gpt_response(self, messages: List[Dict]) -> str:
-        """Получение ответа от GPT"""
+    def get_gpt_response_sync(self, messages: List[Dict]) -> str:
+        """Синхронное получение ответа от GPT"""
         try:
-            response = await self.openai_client.chat.completions.create(
-                model=config.MODEL,
-                messages=messages,
-                max_tokens=config.MAX_TOKENS,
-                temperature=config.TEMPERATURE
-            )
-            return response.choices[0].message.content
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                response = loop.run_until_complete(self.openai_client.chat.completions.create(
+                    model=config.MODEL,
+                    messages=messages,
+                    max_tokens=config.MAX_TOKENS,
+                    temperature=config.TEMPERATURE
+                ))
+                return response.choices[0].message.content
+            finally:
+                loop.close()
         except Exception as e:
             logger.error(f"Ошибка GPT: {e}")
             return "Извините, произошла ошибка при получении ответа. Попробуйте еще раз."
     
-    async def process_message(self, user_message: str, user_id: int) -> str:
+    def process_message(self, user_message: str, user_id: int) -> str:
         """Обработка сообщения пользователя"""
         try:
             # Поиск в базе знаний
-            knowledge_results = await self.knowledge.search_knowledge(user_message, limit=3)
+            knowledge_results = self.knowledge.search_knowledge_sync(user_message, limit=3)
             
             # Получаем историю разговора
-            conversation_history = await self.memory.get_conversation_history(user_id, limit=5)
+            conversation_history = self.memory.get_conversation_history_sync(user_id, limit=5)
             
             # Формируем контекст
             knowledge_context = ""
@@ -616,11 +585,11 @@ class LesliAssistant:
             messages.append({"role": "user", "content": user_message})
             
             # Получаем ответ
-            response = await self.get_gpt_response(messages)
+            response = self.get_gpt_response_sync(messages)
             
             # Сохраняем в память
-            await self.memory.save_message(user_id, "user", user_message)
-            await self.memory.save_message(user_id, "assistant", response)
+            self.memory.save_message_sync(user_id, "user", user_message)
+            self.memory.save_message_sync(user_id, "assistant", response)
             
             return response
             
@@ -628,45 +597,60 @@ class LesliAssistant:
             logger.error(f"Ошибка обработки сообщения: {e}")
             return "Извините, произошла ошибка. Попробуйте еще раз."
 
-# Создаем экземпляр бота
+# Создаем экземпляр бота-ассистента
 assistant = LesliAssistant()
 
 def create_main_menu_keyboard():
     """Создание обновленной клавиатуры меню"""
-    keyboard = [
-        # Базовые функции анализа
-        [InlineKeyboardButton("🧠 Кейс", callback_data="menu_keis"),
-         InlineKeyboardButton("💬 Переписка", callback_data="menu_perepiska")],
-        [InlineKeyboardButton("💡 Ответ", callback_data="menu_otvet"),
-         InlineKeyboardButton("📸 Скрин", callback_data="menu_skrin")],
-        
-        # Свидания
-        [InlineKeyboardButton("🥂 Свидание 1", callback_data="menu_svidanie1"),
-         InlineKeyboardButton("💑 Свидание 2", callback_data="menu_svidanie2")],
-        [InlineKeyboardButton("📊 Анализ 1", callback_data="menu_analiz1"),
-         InlineKeyboardButton("📈 Анализ 2", callback_data="menu_analiz2")],
-        
-        # Новые функции
-        [InlineKeyboardButton("🆘 SOS Сигналы", callback_data="menu_sos"),
-         InlineKeyboardButton("🎭 Стили соблазнения", callback_data="menu_styles")],
-        [InlineKeyboardButton("📖 Истории", callback_data="menu_stories"),
-         InlineKeyboardButton("💡 Сигналы интереса", callback_data="menu_signals")],
-        [InlineKeyboardButton("👩 Типажи девушек", callback_data="menu_types"),
-         InlineKeyboardButton("💬 Темы для свиданий", callback_data="menu_topics")],
-        
-        # Знания
-        [InlineKeyboardButton("🧬 Психотип", callback_data="menu_psihotip"),
-         InlineKeyboardButton("📚 Знание", callback_data="menu_znanie")],
-        [InlineKeyboardButton("🔬 Наука", callback_data="menu_nauka"),
-         InlineKeyboardButton("👨‍🏫 Наставник", callback_data="menu_nastavnik")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    keyboard = InlineKeyboardMarkup()
+    
+    # Базовые функции анализа
+    keyboard.row(
+        InlineKeyboardButton("🧠 Кейс", callback_data="menu_keis"),
+        InlineKeyboardButton("💬 Переписка", callback_data="menu_perepiska")
+    )
+    keyboard.row(
+        InlineKeyboardButton("💡 Ответ", callback_data="menu_otvet"),
+        InlineKeyboardButton("📸 Скрин", callback_data="menu_skrin")
+    )
+    
+    # Свидания
+    keyboard.row(
+        InlineKeyboardButton("🥂 Свидание 1", callback_data="menu_svidanie1"),
+        InlineKeyboardButton("💑 Свидание 2", callback_data="menu_svidanie2")
+    )
+    keyboard.row(
+        InlineKeyboardButton("📊 Анализ 1", callback_data="menu_analiz1"),
+        InlineKeyboardButton("📈 Анализ 2", callback_data="menu_analiz2")
+    )
+    
+    # Новые функции
+    keyboard.row(
+        InlineKeyboardButton("🆘 SOS Сигналы", callback_data="menu_sos"),
+        InlineKeyboardButton("🎭 Стили соблазнения", callback_data="menu_styles")
+    )
+    keyboard.row(
+        InlineKeyboardButton("📖 Истории", callback_data="menu_stories"),
+        InlineKeyboardButton("💡 Сигналы интереса", callback_data="menu_signals")
+    )
+    keyboard.row(
+        InlineKeyboardButton("👩 Типажи девушек", callback_data="menu_types"),
+        InlineKeyboardButton("💬 Темы для свиданий", callback_data="menu_topics")
+    )
+    
+    # Знания
+    keyboard.row(
+        InlineKeyboardButton("🧬 Психотип", callback_data="menu_psihotip"),
+        InlineKeyboardButton("📚 Знание", callback_data="menu_znanie")
+    )
+    keyboard.row(
+        InlineKeyboardButton("🔬 Наука", callback_data="menu_nauka"),
+        InlineKeyboardButton("👨‍🏫 Наставник", callback_data="menu_nastavnik")
+    )
+    
+    return keyboard
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
-    await show_main_menu(update, context)
-
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def show_main_menu(message):
     """Показать основное меню"""
     menu_text = """
 🔥 **LESLI45BOT 2.0 - Главное меню**
@@ -685,283 +669,251 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     
     try:
-        if update.callback_query:
-            await update.callback_query.edit_message_text(
-                text=menu_text,
-                reply_markup=create_main_menu_keyboard(),
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text(
-                text=menu_text,
-                reply_markup=create_main_menu_keyboard(),
-                parse_mode='Markdown'
-            )
+        bot.send_message(
+            message.chat.id,
+            menu_text,
+            reply_markup=create_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
     except Exception as e:
         logger.error(f"Ошибка показа меню: {e}")
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатий кнопок"""
-    query = update.callback_query
-    await query.answer()
-    
-    menu_type = query.data.replace("menu_", "")
-    user_id = query.from_user.id
-    
-    if menu_type == "keis":
-        await query.edit_message_text(
-            "🧠 **Анализ кейса**\n\n"
-            "Опиши ситуацию с девушкой:\n"
-            "• Где познакомились?\n"
-            "• Как общались?\n"
-            "• Что пошло не так?\n\n"
-            "Дам конкретные советы по исправлению!"
-        )
-    elif menu_type == "perepiska":
-        await query.edit_message_text(
-            "💬 **Анализ переписки**\n\n"
-            "Пришли скрин переписки или опиши диалог.\n\n"
-            "Проанализирую:\n"
-            "• Её интерес и настроение\n"
-            "• Твои ошибки\n"
-            "• Как продолжить общение\n\n"
-            "Можешь прислать фото переписки!"
-        )
-    elif menu_type == "otvet":
-        await query.edit_message_text(
-            "💡 **Помощь с ответом**\n\n"
-            "Опиши ситуацию:\n"
-            "• Что она написала?\n"
-            "• Контекст общения\n"
-            "• Твоя цель\n\n"
-            "Дам варианты ответов с объяснением!"
-        )
-    elif menu_type == "skrin":
-        await query.edit_message_text(
-            "📸 **Анализ скрина**\n\n"
-            "Пришли скрин:\n"
-            "• Переписки\n"
-            "• Профиля девушки\n"
-            "• Истории/поста\n\n"
-            "Проанализирую и дам рекомендации!"
-        )
-    elif menu_type == "svidanie1":
-        await query.edit_message_text(
-            "🥂 **Первое свидание**\n\n"
-            "Расскажи о девушке:\n"
-            "• Где познакомились?\n"
-            "• Её психотип\n"
-            "• Что планируешь?\n\n"
-            "Дам стратегию для идеального первого свидания!"
-        )
-    elif menu_type == "svidanie2":
-        await query.edit_message_text(
-            "💑 **Второе свидание**\n\n"
-            "Как прошло первое свидание?\n"
-            "• Что делали?\n"
-            "• Её реакция\n"
-            "• Уровень близости\n\n"
-            "Составлю план для второго свидания!"
-        )
-    elif menu_type == "analiz1":
-        await query.edit_message_text(
-            "📊 **Анализ первого свидания**\n\n"
-            "Опиши как прошло:\n"
-            "• Место и активность\n"
-            "• Её поведение\n"
-            "• Твои действия\n"
-            "• Итог встречи\n\n"
-            "Проанализирую и дам рекомендации!"
-        )
-    elif menu_type == "analiz2":
-        await query.edit_message_text(
-            "📈 **Анализ второго свидания**\n\n"
-            "Расскажи детали:\n"
-            "• Что изменилось?\n"
-            "• Уровень интимности\n"
-            "• Её сигналы\n"
-            "• Планы на будущее\n\n"
-            "Дам оценку прогресса!"
-        )
-    elif menu_type == "sos":
-        await query.edit_message_text(
-            "🆘 **SOS Сигналы**\n\n"
-            "Экстренные техники влияния:\n"
-            "• Через образы и истории\n"
-            "• Невербальные сигналы\n"
-            "• Эмоциональные якоря\n\n"
-            "Опиши критическую ситуацию!"
-        )
-    elif menu_type == "styles":
-        keyboard = [
-            [InlineKeyboardButton("😈 Подонок", callback_data="style_podonok")],
-            [InlineKeyboardButton("🌹 Романтик", callback_data="style_romantic")],
-            [InlineKeyboardButton("🔥 Провокатор", callback_data="style_provokator")],
-            [InlineKeyboardButton("📋 Структурный", callback_data="style_structural")],
-            [InlineKeyboardButton("👑 Мастер", callback_data="style_master")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="menu_main")]
-        ]
-        await query.edit_message_text(
-            "🎭 **Стили соблазнения**\n\n"
-            "Выбери стиль для изучения:\n\n"
-            "😈 **Подонок** - доминирование и вызов\n"
-            "🌹 **Романтик** - эмоции и чувства\n"
-            "🔥 **Провокатор** - интрига и загадочность\n"
-            "📋 **Структурный** - логика и планирование\n"
-            "👑 **Мастер** - комбинация всех стилей",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    elif menu_type == "stories":
-        await query.edit_message_text(
-            "📖 **Создание историй**\n\n"
-            "Опиши:\n"
-            "• Психотип девушки\n"
-            "• Ситуация для истории\n"
-            "• Цель (впечатлить/заинтриговать/соблазнить)\n\n"
-            "Создам убедительную историю под её тип!"
-        )
-    elif menu_type == "signals":
-        keyboard = [
-            [InlineKeyboardButton("💬 В переписке", callback_data="signals_chat")],
-            [InlineKeyboardButton("🥂 На свидании", callback_data="signals_date")],
-            [InlineKeyboardButton("📱 В соцсетях", callback_data="signals_social")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="menu_main")]
-        ]
-        await query.edit_message_text(
-            "💡 **Сигналы интереса**\n\n"
-            "Где распознаем сигналы?\n\n"
-            "💬 **В переписке** - текст, эмодзи, время ответа\n"
-            "🥂 **На свидании** - жесты, взгляды, поведение\n"
-            "📱 **В соцсетях** - лайки, просмотры, активность",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    elif menu_type == "types":
-        keyboard = [
-            [InlineKeyboardButton("👸 Контролирующая", callback_data="type_control")],
-            [InlineKeyboardButton("🔥 Чувственная", callback_data="type_sensual")],
-            [InlineKeyboardButton("🎭 Эмоциональная", callback_data="type_emotional")],
-            [InlineKeyboardButton("🌙 Замкнутая", callback_data="type_closed")],
-            [InlineKeyboardButton("🌸 Молодые", callback_data="type_young")],
-            [InlineKeyboardButton("⬅️ Назад", callback_data="menu_main")]
-        ]
-        await query.edit_message_text(
-            "👩 **Типажи девушек**\n\n"
-            "Выбери тип для изучения:\n\n"
-            "👸 **Контролирующая** - доминантная, властная\n"
-            "🔥 **Чувственная** - эмоциональная, страстная\n"
-            "🎭 **Эмоциональная** - импульсивная, яркая\n"
-            "🌙 **Замкнутая** - скрытная, недоступная\n"
-            "🌸 **Молодые** - неопытные, открытые",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    elif menu_type == "topics":
-        await query.edit_message_text(
-            "💬 **Темы для первого свидания**\n\n"
-            "Опиши девушку:\n"
-            "• Возраст и интересы\n"
-            "• Психотип\n"
-            "• Место встречи\n\n"
-            "Дам список тем и вопросов для поддержания интереса!"
-        )
-    elif menu_type == "psihotip":
-        await query.edit_message_text(
-            "🧬 **Определение психотипа**\n\n"
-            "Опиши девушку:\n"
-            "• Поведение в общении\n"
-            "• Реакции на ситуации\n"
-            "• Стиль жизни\n"
-            "• Что её мотивирует\n\n"
-            "Определю психотип и дам рекомендации!"
-        )
-    elif menu_type == "znanie":
-        await query.edit_message_text(
-            "📚 **База знаний**\n\n"
-            "О чем хочешь узнать из теории?\n\n"
-            "Например: 'как создать доверие перед сексом'"
-        )
-    elif menu_type == "nauka":
-        await query.edit_message_text(
-            "🔬 **Научная база**\n\n"
-            "О какой научной теории хочешь узнать?\n\n"
-            "Примеры:\n"
-            "• теория привязанности\n"
-            "• психология влияния\n"
-            "• нейробиология притяжения"
-        )
-    elif menu_type == "nastavnik":
-        await query.edit_message_text(
-            "👨‍🏫 **Режим наставника**\n\n"
-            "Расскажи о своей текущей ситуации:\n"
-            "• Цели в отношениях\n"
-            "• Проблемы с девушками\n"
-            "• Что хочешь улучшить\n\n"
-            "Дам персональный план развития!"
-        )
-    elif menu_type == "main":
-        await show_main_menu(update, context)
-    
-    # Обработка стилей соблазнения
-    elif query.data.startswith("style_"):
-        style = query.data.replace("style_", "")
-        response = await assistant.process_message(f"Расскажи подробно о стиле соблазнения {style}", user_id)
-        await query.edit_message_text(response)
-    
-    # Обработка типажей
-    elif query.data.startswith("type_"):
-        type_name = query.data.replace("type_", "")
-        response = await assistant.process_message(f"Расскажи как работать с типажом девушки {type_name}", user_id)
-        await query.edit_message_text(response)
-    
-    # Обработка сигналов
-    elif query.data.startswith("signals_"):
-        signal_type = query.data.replace("signals_", "")
-        response = await assistant.process_message(f"Расскажи о сигналах интереса {signal_type}", user_id)
-        await query.edit_message_text(response)
+@bot.message_handler(commands=['start'])
+def start_command(message):
+    """Команда /start"""
+    show_main_menu(message)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback(call):
+    """Обработка нажатий кнопок"""
+    try:
+        menu_type = call.data.replace("menu_", "")
+        user_id = call.from_user.id
+        
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback(call):
+    """Обработка нажатий кнопок"""
+    try:
+        menu_type = call.data.replace("menu_", "")
+        user_id = call.from_user.id
+        
+        if menu_type == "keis":
+            bot.edit_message_text(
+                "🧠 **Анализ кейса**\n\n"
+                "Опиши ситуацию с девушкой:\n"
+                "• Где познакомились?\n"
+                "• Как общались?\n"
+                "• Что пошло не так?\n\n"
+                "Дам конкретные советы по исправлению!",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                parse_mode='Markdown'
+            )
+        elif menu_type == "perepiska":
+            bot.edit_message_text(
+                "💬 **Анализ переписки**\n\n"
+                "Пришли скрин переписки или опиши диалог.\n\n"
+                "Проанализирую:\n"
+                "• Её интерес и настроение\n"
+                "• Твои ошибки\n"
+                "• Как продолжить общение\n\n"
+                "Можешь прислать фото переписки!",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                parse_mode='Markdown'
+            )
+        elif menu_type == "otvet":
+            bot.edit_message_text(
+                "💡 **Помощь с ответом**\n\n"
+                "Опиши ситуацию:\n"
+                "• Что она написала?\n"
+                "• Контекст общения\n"
+                "• Твоя цель\n\n"
+                "Дам варианты ответов с объяснением!",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                parse_mode='Markdown'
+            )
+        elif menu_type == "styles":
+            keyboard = InlineKeyboardMarkup()
+            keyboard.add(InlineKeyboardButton("😈 Подонок", callback_data="style_podonok"))
+            keyboard.add(InlineKeyboardButton("🌹 Романтик", callback_data="style_romantic"))
+            keyboard.add(InlineKeyboardButton("🔥 Провокатор", callback_data="style_provokator"))
+            keyboard.add(InlineKeyboardButton("📋 Структурный", callback_data="style_structural"))
+            keyboard.add(InlineKeyboardButton("👑 Мастер", callback_data="style_master"))
+            keyboard.add(InlineKeyboardButton("⬅️ Назад", callback_data="menu_main"))
+            
+            bot.edit_message_text(
+                "🎭 **Стили соблазнения**\n\n"
+                "Выбери стиль для изучения:\n\n"
+                "😈 **Подонок** - доминирование и вызов\n"
+                "🌹 **Романтик** - эмоции и чувства\n"
+                "🔥 **Провокатор** - интрига и загадочность\n"
+                "📋 **Структурный** - логика и планирование\n"
+                "👑 **Мастер** - комбинация всех стилей",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+        elif menu_type == "types":
+            keyboard = InlineKeyboardMarkup()
+            keyboard.add(InlineKeyboardButton("👸 Контролирующая", callback_data="type_control"))
+            keyboard.add(InlineKeyboardButton("🔥 Чувственная", callback_data="type_sensual"))
+            keyboard.add(InlineKeyboardButton("🎭 Эмоциональная", callback_data="type_emotional"))
+            keyboard.add(InlineKeyboardButton("🌙 Замкнутая", callback_data="type_closed"))
+            keyboard.add(InlineKeyboardButton("🌸 Молодые", callback_data="type_young"))
+            keyboard.add(InlineKeyboardButton("⬅️ Назад", callback_data="menu_main"))
+            
+            bot.edit_message_text(
+                "👩 **Типажи девушек**\n\n"
+                "Выбери тип для изучения:\n\n"
+                "👸 **Контролирующая** - доминантная, властная\n"
+                "🔥 **Чувственная** - эмоциональная, страстная\n"
+                "🎭 **Эмоциональная** - импульсивная, яркая\n"
+                "🌙 **Замкнутая** - скрытная, недоступная\n"
+                "🌸 **Молодые** - неопытные, открытые",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+        elif menu_type == "znanie":
+            bot.edit_message_text(
+                "📚 **База знаний**\n\n"
+                "О чем хочешь узнать из теории?\n\n"
+                "Например: 'как создать доверие перед сексом'",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                parse_mode='Markdown'
+            )
+        elif menu_type == "main":
+            menu_text = """
+🔥 **LESLI45BOT 2.0 - Главное меню**
+
+Выбери нужную функцию:
+
+🧠 **Анализ** - разбор ситуаций и кейсов
+💬 **Общение** - помощь с перепиской и ответами
+🥂 **Свидания** - стратегии для встреч
+🆘 **SOS** - экстренные техники влияния
+🎭 **Стили** - методы соблазнения
+👩 **Типажи** - работа с разными девушками
+🧬 **Психология** - научный анализ
+
+Используй кнопки ниже для быстрого доступа к функциям! 👇
+"""
+            bot.edit_message_text(
+                menu_text,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=create_main_menu_keyboard(),
+                parse_mode='Markdown'
+            )
+        
+        # Обработка стилей
+        elif call.data.startswith("style_"):
+            style = call.data.replace("style_", "")
+            response = assistant.process_message(f"Расскажи подробно о стиле соблазнения {style}", user_id)
+            bot.edit_message_text(
+                response,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id
+            )
+        
+        # Обработка типажей
+        elif call.data.startswith("type_"):
+            type_name = call.data.replace("type_", "")
+            response = assistant.process_message(f"Расскажи как работать с типажом девушки {type_name}", user_id)
+            bot.edit_message_text(
+                response,
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id
+            )
+        
+        # Все остальные кнопки меню
+        else:
+            menu_responses = {
+                "skrin": "📸 **Анализ скрина**\n\nПришли скрин переписки, профиля или истории для анализа!",
+                "svidanie1": "🥂 **Первое свидание**\n\nРасскажи о девушке и что планируешь - дам стратегию!",
+                "svidanie2": "💑 **Второе свидание**\n\nКак прошло первое? Составлю план для второго!",
+                "analiz1": "📊 **Анализ первого свидания**\n\nОпиши как прошло - дам рекомендации!",
+                "analiz2": "📈 **Анализ второго свидания**\n\nРасскажи детали - оценю прогресс!",
+                "sos": "🆘 **SOS Сигналы**\n\nОпиши критическую ситуацию - дам экстренные техники!",
+                "stories": "📖 **Создание историй**\n\nОпиши психотип девушки - создам убедительную историю!",
+                "signals": "💡 **Сигналы интереса**\n\nОпиши ситуацию - научу распознавать её интерес!",
+                "topics": "💬 **Темы для свиданий**\n\nОпиши девушку - дам темы для разговора!",
+                "psihotip": "🧬 **Психотип**\n\nОпиши поведение девушки - определю её психотип!",
+                "nauka": "🔬 **Научная база**\n\nО какой теории хочешь узнать? (привязанность, влияние, притяжение)",
+                "nastavnik": "👨‍🏫 **Наставник**\n\nРасскажи о ситуации - дам персональный план!"
+            }
+            
+            if menu_type in menu_responses:
+                bot.edit_message_text(
+                    menu_responses[menu_type],
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    parse_mode='Markdown'
+                )
+        
+        bot.answer_callback_query(call.id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки callback: {e}")
+        bot.answer_callback_query(call.id, "Произошла ошибка")
+
+@bot.message_handler(content_types=['text'])
+def handle_message(message):
     """Обработка текстовых сообщений"""
     try:
-        user_message = update.message.text
-        user_id = update.effective_user.id
+        user_message = message.text
+        user_id = message.from_user.id
         
         # Обрабатываем сообщение через ассистента
-        response = await assistant.process_message(user_message, user_id)
+        response = assistant.process_message(user_message, user_id)
         
         # Отправляем ответ
-        await update.message.reply_text(response)
+        bot.reply_to(message, response)
         
     except Exception as e:
         logger.error(f"Ошибка обработки сообщения: {e}")
-        await update.message.reply_text("Произошла ошибка. Попробуйте еще раз или используйте /start для перезапуска.")
+        bot.reply_to(message, "Произошла ошибка. Попробуйте еще раз или используйте /start для перезапуска.")
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
     """Обработка фотографий"""
     try:
-        user_id = update.effective_user.id
+        user_id = message.from_user.id
         
         # Получаем фото
-        photo = update.message.photo[-1]  # Берем самое большое разрешение
-        file = await context.bot.get_file(photo.file_id)
+        photo = message.photo[-1]  # Берем самое большое разрешение
+        file_info = bot.get_file(photo.file_id)
         
         # Скачиваем изображение
-        image_data = await file.download_as_bytearray()
+        file_url = f"https://api.telegram.org/file/bot{config.TELEGRAM_TOKEN}/{file_info.file_path}"
+        response = requests.get(file_url)
+        image_data = response.content
         
-        # Анализируем изображение
-        caption = update.message.caption or ""
-        analysis = await assistant.image_analyzer.analyze_image(bytes(image_data), caption)
+        # Простой анализ фото (без GPT Vision для упрощения)
+        caption = message.caption or ""
+        analysis = f"📸 **Анализ фото:**\n\n"
+        analysis += f"Получил фото для анализа"
+        if caption:
+            analysis += f" с подписью: '{caption}'"
+        analysis += f"\n\nДля подробного анализа опиши что видишь на фото текстом, и я дам рекомендации по соблазнению!"
         
         # Сохраняем в память
-        await assistant.memory.save_message(user_id, "user", f"[Фото] {caption}")
-        await assistant.memory.save_message(user_id, "assistant", analysis)
+        assistant.memory.save_message_sync(user_id, "user", f"[Фото] {caption}")
+        assistant.memory.save_message_sync(user_id, "assistant", analysis)
         
         # Отправляем результат
-        await update.message.reply_text(f"📸 **Анализ фото:**\n\n{analysis}")
+        bot.reply_to(message, analysis, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Ошибка обработки фото: {e}")
-        await update.message.reply_text("Не могу проанализировать фото. Попробуйте еще раз.")
+        bot.reply_to(message, "Не могу проанализировать фото. Опиши что на нем изображено текстом!")
 
-async def main():
+def main():
     """Главная функция"""
     try:
         # Проверяем наличие токенов
@@ -974,28 +926,15 @@ async def main():
             return
         
         logger.info("🚀 Запускаю LESLI45BOT 2.0...")
-        
-        # Инициализируем базу данных
-        await assistant.initialize_database()
-        
-        # Создаем приложение
-        application = Application.builder().token(config.TELEGRAM_TOKEN).build()
-        
-        # Добавляем обработчики
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CallbackQueryHandler(handle_callback))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        
         logger.info("✅ Обработчики добавлены")
         logger.info("🎉 LESLI45BOT 2.0 запущен и готов к работе!")
         
         # Запускаем бота через polling
-        await application.run_polling(allowed_updates=Update.ALL_TYPES)
+        bot.polling(none_stop=True, interval=0, timeout=30)
         
     except Exception as e:
         logger.error(f"❌ Критическая ошибка запуска: {e}")
         logger.error(traceback.format_exc())
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
