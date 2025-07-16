@@ -690,13 +690,6 @@ def handle_callback(call):
         menu_type = call.data.replace("menu_", "")
         user_id = call.from_user.id
         
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callback(call):
-    """Обработка нажатий кнопок"""
-    try:
-        menu_type = call.data.replace("menu_", "")
-        user_id = call.from_user.id
-        
         if menu_type == "keis":
             bot.edit_message_text(
                 "🧠 **Анализ кейса**\n\n"
@@ -709,6 +702,13 @@ def handle_callback(call):
                 message_id=call.message.message_id,
                 parse_mode='Markdown'
             )
+        elif menu_type == "perepiska":
+            bot.edit_message_text(
+                "💬 **Анализ переписки**\n\n"
+                "Пришли скрин переписки или опиши диалог.\n\n"
+                "Проанализирую:\n"
+                "• Её интерес и настроение\n"
+                "• Твои ошибки\n"
         elif menu_type == "perepiska":
             bot.edit_message_text(
                 "💬 **Анализ переписки**\n\n"
