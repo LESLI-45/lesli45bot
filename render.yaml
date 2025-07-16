@@ -13,4 +13,4 @@ services:
         fromEnvVar: OPENAI_API_KEY
       - key: DATABASE_URL
         fromEnvVar: DATABASE_URL
-pythonVersion: 3.10.13
+    pythonVersion: 3.10.13
