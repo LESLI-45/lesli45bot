@@ -301,7 +301,7 @@ class KnowledgeBase:
                                 try:
                                     self.db.close()
                                     if config.DATABASE_URL:
-                                        self.db = psycopg2.connect(config.DATABASE_URL)
+                                        self.db = psycopg2.connect(os.environ["DATABASE_URL"])
                                     await asyncio.sleep(1)  # Небольшая задержка
                                 except:
                                     pass
@@ -497,13 +497,7 @@ class LesliAssistant:
             try:
                 if config.DATABASE_URL:
                     logger.info("🔗 Подключаюсь к PostgreSQL...")
-                    self.db = psycopg2.connect(
-                        config.DATABASE_URL,
-                        connect_timeout=30,
-                        keepalives_idle=30,
-                        keepalives_interval=5,
-                        keepalives_count=5
-                    )
+                    self.db = psycopg2.connect(os.environ["DATABASE_URL"])
                     # Устанавливаем autocommit для стабильности
                     self.db.autocommit = True
                     logger.info("✅ Подключение к PostgreSQL успешно")
